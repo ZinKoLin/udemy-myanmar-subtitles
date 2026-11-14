@@ -13,8 +13,8 @@ test('complete SRT roundtrip preserves millisecond timing, gaps and all cues', (
   assert.equal(browser.parseReply(reply('job'), 'job', cues).length, 2);
   assert.throws(() => browser.toSrt([{ text: 'Untimed transcript', transcript: true }]));
 });
-test('partial replies, wrong job, duplicate IDs, blank cues and timestamp edits fail closed', () => {
-  for (const raw of [reply('other'), reply('job').replace('END_job', ''), reply('job').replace('00:00:05,750', '00:00:05,751'), reply('job').replace('\n2\n', '\n1\n'), reply('job', ''), reply('job').replace(/\n\n2[\s\S]*?```/, '\n```')]) {
+test('partial replies, wrong job, duplicate IDs, blank cues fail closed', () => {
+  for (const raw of [reply('other'), reply('job').replace('END_job', ''), reply('job').replace('\n2\n', '\n1\n'), reply('job', ''), reply('job').replace(/\n\n2[\s\S]*?```/, '\n```')]) {
     assert.throws(() => browser.parseReply(raw, 'job', cues));
   }
 });
@@ -52,7 +52,7 @@ test('whole lecture goes as one SRT job, survives worker restart, validates and 
   const restarted = setup(app.saved);
   task = await restarted.send({ type: 'WEB_TASK' }, restarted.gemini);
   assert.equal(task.state, 'waiting'); assert.equal(task.srt, undefined);
-  const invalid = await restarted.send({ type: 'WEB_RESULT', id: started.id, raw: reply(started.id).replace('00:00:05,750', '00:00:06,000') }, restarted.gemini);
+  const invalid = await restarted.send({ type: 'WEB_RESULT', id: started.id, raw: reply(started.id).replace('\n2\n', '\n1\n') }, restarted.gemini);
   assert.equal(invalid.ok, false); assert.equal(restarted.saved.browserSubtitleJob.state, 'waiting');
   assert.equal((await restarted.send({ type: 'WEB_RESULT', id: started.id, raw: reply(started.id) }, restarted.gemini)).done, true);
   const status = await restarted.send({ type: 'WEB_STATUS', id: started.id });
@@ -157,4 +157,13 @@ test('manual Gemini model mode never reuses translations from a previous manuall
   await app.send({ type: 'WEB_RESULT', id: first.id, raw: reply(first.id) }, app.gemini);
   const next = await app.send({ type: 'WEB_START', cues });
   assert.notEqual(next.id, first.id); assert.equal(next.cached, undefined);
+});
+
+test('model timestamp drift and reversed times cannot change original millisecond cue timing or text order', () => {
+  const raw = reply('job').replace('00:00:00,125 --> 00:00:02,000', '00:10:00,000 --> 00:00:00,000').replace('00:00:03,000 --> 00:00:05,750', '00:00:01,000 --> 00:00:01,001');
+  const translated = browser.translatedCues(raw, 'job', cues);
+  assert.deepEqual(translated.map(({start, end}) => ({start, end})), cues.map(({start, end}) => ({start, end})));
+  assert.deepEqual(translated.map(c => c.text), ['မင်္ဂလာပါ', 'npm test ကို သုံးပါ']);
+  assert.deepEqual(core.parseSubtitles(browser.toSrt(translated)), translated);
+  assert.equal(cues[0].text, 'Hello');
 });

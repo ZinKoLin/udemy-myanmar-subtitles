@@ -22,12 +22,12 @@ test('server stores each full SRT once, rejects mismatched retries and survives 
   const restarted = new Jobs(directory); await restarted.load();
   assert.equal(restarted.get(id).state, 'error'); assert.equal(restarted.get(id).srt, '');
 });
-test('server checks all original timestamps and discards late answers after cancellation', async t => {
+test('server rejects missing cues and discards late answers after cancellation', async t => {
   const { jobs } = await setup(t); const job = await jobs.start({ id, srt });
   const task = await jobs.message(job, { type: 'WEB_TASK' }, account);
   assert.equal(task.expectedEmail, account.email); assert.equal(task.srt.trim(), srt.trim());
   await jobs.message(job, { type: 'WEB_SENT', id }, account);
-  await assert.rejects(jobs.message(job, { type: 'WEB_RESULT', id, raw: answer.replace('02,500', '02,501') }, account), /timestamps/);
+  await assert.rejects(jobs.message(job, { type: 'WEB_RESULT', id, raw: answer.replace('\n1\n', '\n2\n') }, account), /cue number/);
   assert.equal(job.state, 'waiting');
   await jobs.cancel(id);
   await jobs.message(job, { type: 'WEB_RESULT', id, raw: answer }, account);
@@ -61,4 +61,11 @@ test('authenticated server HTTP accepts one complete job, returns promptly, then
   await new Promise(resolve => setTimeout(resolve, 30));
   const completed = await call({ action: 'status', id });
   assert.equal(completed.body.state, 'done'); assert.equal(completed.body.raw, answer);
+});
+
+test('server returns canonical original timestamps even when Gemini changes them', async t => {
+ const {jobs} = await setup(t); const job = await jobs.start({id, srt});
+ await jobs.message(job, {type:'WEB_SENT',id},account);
+ await jobs.message(job, {type:'WEB_RESULT',id,raw:answer.replace('02,500','03,000')},account);
+ assert.equal(job.state,'done'); assert.equal(job.raw, answer);
 });

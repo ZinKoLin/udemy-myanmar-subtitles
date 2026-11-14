@@ -56,8 +56,9 @@ export class Jobs {
     if (input.type === 'WEB_SENT' && job.state === 'ready') { job.state = 'waiting'; job.status = 'The full SRT is being translated in server Gemini / selected model.'; await this.save(); return { ok: true, claimed: true }; }
     if (input.type === 'WEB_RESULT' && job.state === 'waiting') {
       if (typeof input.raw !== 'string' || input.raw.length > 4000000) throw new Error('Invalid Gemini response.');
-      subtitle.parseReply(input.raw, job.id, job.cues);
-      job.raw = input.raw; job.state = 'done'; job.status = 'Complete translated SRT validated.'; job.srt = ''; job.cues = []; await this.save();
+      const translated = subtitle.translatedCues(input.raw, job.id, job.cues);
+      job.raw = `BEGIN_${job.id}\n${subtitle.toSrt(translated)}END_${job.id}`;
+      job.state = 'done'; job.status = 'Complete translated SRT validated with original timestamps.'; job.srt = ''; job.cues = []; await this.save();
     }
     if (input.type === 'WEB_ERROR' && !terminal(job)) await this.fail(job, input.error);
     return { ok: true };

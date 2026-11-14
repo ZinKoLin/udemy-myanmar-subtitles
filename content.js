@@ -1,7 +1,7 @@
 (() => {
   let video = null, sourceUrl = location.pathname, cues = [], translations = new Map(), generation = 0, running = false;
   let imported = false, visible = true, lastScan = 0, ownedTrack = null, lastCaptionIndex = -1, discovering = null;
-  let browserJobId = null;
+  let browserJobId = null, waitingForFullSrt = false;
   let preferences = SubtitleCore.preferences(), settingsReady = false, autoBusy = false, autoStarted = false, autoAttempts = 0, nextAutoAt = Date.now() + 1800, mediaSource = '';
   const host = document.createElement('div');
   host.style.cssText = 'position:fixed;right:18px;top:80px;z-index:2147483646;';
@@ -17,13 +17,25 @@
   }
   const launcher = element('button', '⚙ Subtitles', shadow); launcher.id = 'launcher';
   launcher.setAttribute('aria-controls', 'subtitle-settings');
-  const readyNotice = element('button', '', shadow); readyNotice.hidden = true;
+  const readyNotice = element('button', '', shadow); readyNotice.hidden = true; readyNotice.id = 'translation-notice';
   readyNotice.setAttribute('role', 'status'); readyNotice.setAttribute('aria-live', 'polite');
   readyNotice.style.cssText = 'display:block;margin:0 0 8px auto;max-width:290px;background:#a5f3d1;color:#102b25;font:13px/1.7 "Myanmar Text",sans-serif;padding:8px 12px;border:0;border-radius:8px;cursor:pointer';
   readyNotice.addEventListener('click', () => setPanelOpen(true));
-  function clearReady() { launcher.textContent = '⚙ Subtitles'; readyNotice.hidden = true; }
+  function clearReady() { launcher.textContent = '⚙ Subtitles'; readyNotice.hidden = true; delete readyNotice.dataset.state; }
+  function announcePending() {
+    launcher.textContent = '⏳ ဘာသာပြန်နေပါသည်';
+    readyNotice.dataset.state = 'translating'; readyNotice.style.background = '#ffe08a';
+    readyNotice.textContent = '⏳ ဘာသာပြန်နေပါသည်။ စာတန်းမရသေးပါ။\nအသင့်ဖြစ်မှ Play နှိပ်ကြည့်ပါ။';
+    readyNotice.hidden = false;
+  }
+  function announceError() {
+    launcher.textContent = '⚠ စာတန်း မရသေးပါ';
+    readyNotice.dataset.state = 'error'; readyNotice.style.background = '#ffc3b8';
+    readyNotice.textContent = '⚠ ဘာသာပြန်မပြီးသေးပါ။ စာတန်း မရသေးပါ။\nအသေးစိတ်ကြည့်ရန် နှိပ်ပါ။'; readyNotice.hidden = false;
+  }
   function announceReady(count, cached = false) {
     launcher.textContent = '✓ Subtitles ready';
+    readyNotice.dataset.state = 'ready'; readyNotice.style.background = '#a5f3d1';
     readyNotice.textContent = `✓ စာတန်းထိုး အသင့်ဖြစ်ပြီ — ${count} / ${count}${cached ? ' (သိမ်းထားပြီးသား)' : ''}`;
     readyNotice.hidden = false;
   }
@@ -164,8 +176,13 @@
   function restoreTrack() { if (ownedTrack?.mode === 'hidden') ownedTrack.mode = 'disabled'; ownedTrack = null; }
   function cancel() {
     if (browserJobId) { chrome.runtime.sendMessage({ type: 'WEB_CANCEL', id: browserJobId }).catch(() => {}); browserJobId = null; }
+    if (waitingForFullSrt) announceError();
+    waitingForFullSrt = false;
     generation++; running = false; start.disabled = false; stop.disabled = true;
   }
+  document.addEventListener('play', event => {
+    if (waitingForFullSrt && event.target === video) { video.pause(); announcePending(); }
+  }, true);
   function reset() {
     cancel(); restoreTrack(); cues = []; translations.clear(); clearReady(); imported = false; file.value = ''; fileName.textContent = 'No file selected.'; lastCaptionIndex = -1;
     autoStarted = false; autoAttempts = 0; nextAutoAt = Date.now() + 1800;
@@ -285,6 +302,7 @@
     const lecturePath = location.pathname;
     running = true; start.disabled = true; stop.disabled = false;
     translations.clear(); clearReady();
+    waitingForFullSrt = true; announcePending();
     if (video) video.pause();
     try {
       status.textContent = 'Preparing the complete lecture SRT file…';
@@ -316,9 +334,9 @@
       status.textContent = `${texts.length} / ${texts.length} subtitle lines ready${result.cached ? ' from cache' : ''}. Full SRT translation complete. Press Play to watch.`;
       announceReady(texts.length, result.cached);
     } catch (error) {
-      if (token === generation) status.textContent = error.message;
+      if (token === generation) { status.textContent = error.message; announceError(); }
     } finally {
-      if (token === generation) { browserJobId = null; running = false; start.disabled = false; stop.disabled = true; }
+      if (token === generation) { waitingForFullSrt = false; browserJobId = null; running = false; start.disabled = false; stop.disabled = true; }
     }
   }
   async function translateCurrent() {
@@ -425,6 +443,7 @@
       reset(); sourceUrl = location.pathname; video = next; mediaSource = nextSource;
     }
     automaticTranslation();
+    if (waitingForFullSrt && video && !video.paused) video.pause();
     if (!video || !visible) { overlay.style.display = 'none'; return; }
     if (!cues.length && !imported && !running && Date.now() - lastScan > 2000) {
       lastScan = Date.now(); const found = readTrack();

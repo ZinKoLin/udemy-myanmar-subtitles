@@ -23,7 +23,7 @@ async function webHandle(message, sender) {
     const browserModel = BrowserSubtitleCore.model(settings.geminiBrowserModel);
     const srt = BrowserSubtitleCore.toSrt(message.cues);
     const cues = SubtitleCore.parseSubtitles(srt);
-    const cacheKey = 'translation:browser-srt:' + await digest(JSON.stringify([SubtitleCore.revision, browserModel, ...(remote ? [remote.url] : []), srt]));
+    const cacheKey = 'translation:browser-srt-v2:' + await digest(JSON.stringify([SubtitleCore.revision, browserModel, ...(remote ? [remote.url] : []), srt]));
     const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
     if (cached && browserModel !== 'current') return { done: true, cached: true, texts: SubtitleCore.validateTranslations(cached.map((text, id) => ({ id, text })), cues.length) };
     const old = await webRead();
