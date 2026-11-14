@@ -1,0 +1,10 @@
+.git
+.agents
+.codex
+node_modules
+evidence
+server/.env
+server/node_modules
+server/*.zip
+*.zip
+**/node_modules

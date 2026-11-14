@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="popup.css"><title>Burmese Subtitles</title></head>
+<body>
+  <h1>Udemy Burmese Subtitles</h1>
+  <p>Learn with automatic Burmese subtitles.</p>
+  <label for="translation-provider">Translation method</label>
+  <select id="translation-provider"><option value="browser">Gemini browser — full SRT, no API key</option><option value="api">Gemini API — original method</option><option value="n8n">n8n server — Gemini web on server</option></select>
+  <small>Both methods remain available. Switching methods keeps your saved API keys, models and Pro account settings.</small>
+  <div id="browser-hint">
+    <p>Uses only your configured Pro account with Argon / Medium. Sends one complete SRT file and waits for the entire translation. Reuses the same Gemini chat for later lectures. A ready notice appears on Udemy even when its settings are collapsed.</p>
+    <form id="browser-account-settings">
+      <label for="gemini-account-index">Pro account number in Gemini URL (/u/2/ means 2)</label>
+      <input id="gemini-account-index" type="number" min="0" max="20" value="2" required>
+      <label for="gemini-account-email">Pro account email (checked before uploading)</label>
+      <input id="gemini-account-email" type="email" autocomplete="off" required>
+      <button type="submit">Save Pro account</button>
+    </form>
+    <small>Argon Medium must be available in this account. No automatic account or model fallback.</small>
+  </div>
+  <div id="n8n-hint" hidden>
+    <p>n8n sends the full SRT to your server browser using your Pro account / Argon Medium. No Gemini tab opens on this computer.</p>
+    <form id="n8n-settings">
+      <label for="n8n-url">n8n production webhook URL</label><input id="n8n-url" type="url" placeholder="https://n8n.example.com/webhook/udemy-srt" required>
+      <label for="n8n-token">Webhook access token (not a Gemini API key)</label><input id="n8n-token" type="password" autocomplete="off" required>
+      <button type="submit">Save n8n connection</button>
+    </form>
+    <small>The server package must be installed and signed in first. Saving requests access to your n8n host only.</small>
+  </div>
+  <form id="settings">
+    <div id="api-settings" hidden>
+    <fieldset><legend>Gemini API keys</legend>
+      <div id="keys"></div>
+      <button id="add-key" class="secondary" type="button">Add API key</button>
+      <small>Add up to 8 of your own keys. Duplicate keys are saved only once.</small>
+    </fieldset>
+    <label class="check"><input id="rotate" type="checkbox" checked> Switch keys automatically on quota or key errors</label>
+    <small>Limited keys are paused before reuse. Keys in the same Google project share quota.</small>
+    <label for="model">Gemini model</label>
+    <select id="model" disabled>
+      <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
+      <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+      <option value="custom">Custom model…</option>
+    </select>
+    <label id="custom-label" for="custom-model" hidden>Custom model ID</label>
+    <input id="custom-model" hidden placeholder="gemini-…" pattern="[a-zA-Z0-9._\-]+">
+    <small>Model selections save automatically. Your preferred model stays selected even when a fallback is used.</small>
+    <label class="check"><input id="model-fallback" type="checkbox" checked disabled> Switch models on quota or timeout</label>
+    <label for="fallback-1">Fallback model 1</label>
+    <select id="fallback-1" disabled><option value="">None</option></select>
+    <label for="fallback-2">Fallback model 2</label>
+    <select id="fallback-2" disabled><option value="">None</option></select>
+    <small>On quota, available keys are tried first. On timeout, the next model is tried directly. Each model may have different prices and quota.</small>
+    <small>Timed-out models pause for 10 minutes. Next batches use the working fallback while your preferred model is paused.</small>
+    <button id="refresh-models" class="secondary" type="button">Refresh available models</button>
+    <small>Save keys before refreshing. Choose a text model with JSON output support. Availability and prices vary by model.</small>
+    <button type="submit">Save settings</button>
+    </div>
+  </form>
+  <p id="provider-status" role="status"></p>
+  <button id="open" class="secondary">Open subtitle settings</button>
+  <button id="clear" class="secondary">Clear translation cache</button>
+  <p id="status" role="status" aria-live="polite"></p>
+  <small>Subtitle text is sent to Google Gemini. Account settings and translations are stored on this device. Gemini browser uses your account limits; API mode has separate billing.</small>
+  <script src="core.js"></script>
+  <script src="popup.js"></script>
+  <script src="browser-settings.js"></script>
+</body></html>

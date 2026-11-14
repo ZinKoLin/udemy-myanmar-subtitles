@@ -1,0 +1,42 @@
+services:
+  browser:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    init: true
+    restart: unless-stopped
+    shm_size: 1gb
+    security_opt:
+      - seccomp=./seccomp_profile.json
+    environment:
+      RUNNER_TOKEN: ${RUNNER_TOKEN:?Run setup.sh first}
+      GEMINI_ACCOUNT_EMAIL: ${GEMINI_ACCOUNT_EMAIL:?Set your Pro account email}
+      GEMINI_ACCOUNT_INDEX: ${GEMINI_ACCOUNT_INDEX:-0}
+      VNC_PASSWORD: ${VNC_PASSWORD:?Run setup.sh first}
+    ports:
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - browser-data:/data
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:stable
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Run setup.sh first}
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      GENERIC_TIMEZONE: Asia/Rangoon
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_SAVE_ON_ERROR: none
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "false"
+    volumes:
+      - n8n-data:/home/node/.n8n
+    depends_on:
+      - browser
+volumes:
+  browser-data:
+  n8n-data:

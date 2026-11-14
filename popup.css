@@ -1,0 +1,13 @@
+body { width: 330px; margin: 0; padding: 22px; color: #e5eaf4; background: #101a2b; font: 13px/1.8 "Myanmar Text", sans-serif; }
+h1 { font-size: 19px; margin: 0 0 8px; } p { color: #bfcee1; } label { display: block; margin-top: 12px; }
+input, button, select { box-sizing: border-box; width: 100%; border-radius: 8px; padding: 10px 12px; font: inherit; }
+input, select { background: #1d2b41; border: 1px solid #52617a; color: white; } button { margin-top: 12px; background: #a5f3d1; color: #102b25; border: 0; cursor: pointer; }
+.secondary { background: #24334b; color: #e5eaf4; } small { color: #acbbce; } :focus-visible { outline: 2px solid #a5f3d1; outline-offset: 3px; }
+[hidden] { display: none !important; }
+fieldset { border: 1px solid #52617a; border-radius: 8px; padding: 10px; margin: 16px 0; }
+.key-row { display: flex; gap: 8px; align-items: end; }
+.key-row label { flex: 1; min-width: 0; }
+.key-row button { width: auto; margin: 0; padding: 10px; }
+.check { display: flex; align-items: start; gap: 8px; }
+.check input { width: auto; margin-top: 5px; }
+button:disabled { opacity: .5; cursor: default; }

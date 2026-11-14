@@ -1,0 +1,25 @@
+services:
+  n8n:
+    environment:
+      N8N_HOST: ${N8N_DOMAIN:?Set N8N_DOMAIN in .env}
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://${N8N_DOMAIN}/
+      N8N_EDITOR_BASE_URL: https://${N8N_DOMAIN}/
+      N8N_PROXY_HOPS: 1
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      N8N_DOMAIN: ${N8N_DOMAIN:?Set N8N_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - n8n
+volumes:
+  caddy-data:
+  caddy-config:

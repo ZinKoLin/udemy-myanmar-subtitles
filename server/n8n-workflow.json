@@ -1,0 +1,125 @@
+{
+  "name": "Udemy SRT — n8n + server Gemini Argon Medium",
+  "active": false,
+  "nodes": [
+    {
+      "id": "ee1b7368-052f-438c-a93f-baa64251000c",
+      "name": "SRT commands",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "udemy-srt",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "06d42ac3-7db5-4769-9891-24e14fd12f42"
+    },
+    {
+      "id": "c45dfb4f-e2c3-496f-99ba-062de2db1f5d",
+      "name": "Server Gemini browser",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        300,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://browser:3000/action",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpTemplatedCustomAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "responseFormat": "json",
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "df646224-c733-4a9f-89b7-11253da63423",
+      "name": "Return job status",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      }
+    },
+    {
+      "id": "62e15c44-f90c-46e4-82f4-be0357eaf6a0",
+      "name": "Setup instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -250
+      ],
+      "parameters": {
+        "content": "One complete SRT per job. Set the inbound X-Udemy-Token credential from WEBHOOK_TOKEN. Set the worker credential template to Authorization: Bearer {{api_key}} with RUNNER_TOKEN. Start returns immediately; status polls for the complete validated reply. Deploy server/compose.yaml and sign in through its SSH-tunneled desktop first.",
+        "height": 220,
+        "width": 700
+      }
+    }
+  ],
+  "connections": {
+    "SRT commands": {
+      "main": [
+        [
+          {
+            "node": "Server Gemini browser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Server Gemini browser": {
+      "main": [
+        [
+          {
+            "node": "Return job status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": false,
+    "saveManualExecutions": false,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
