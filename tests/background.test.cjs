@@ -21,9 +21,10 @@ function setup(saved = { apiKey: 'test-secret', model: 'gemini-2.5-flash-lite' }
     chrome: {
       storage: { local: {
         async setAccessLevel(value) { access = value.accessLevel; },
-        async get(keys) { return Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(k => [k, saved[k]])); },
-        async set(value) { Object.assign(saved, value); }
+        async get(keys) { if (keys === null) return structuredClone(saved); return Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(k => [k, saved[k]])); },
+        async set(value) { Object.assign(saved, value); }, async remove(keys) { for (const key of keys) delete saved[key]; }
       } },
+      tabs: { async query() { return []; } }, alarms: { async get() {}, async create() {}, onAlarm: { addListener() {} } },
       runtime: { id: 'extension-test', getURL: path => 'chrome-extension://extension-test/' + path, onMessage: { addListener(fn) { listener = fn; } } }
     }
   });

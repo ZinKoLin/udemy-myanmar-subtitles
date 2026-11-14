@@ -24,7 +24,7 @@ async function webHandle(message, sender) {
     const srt = BrowserSubtitleCore.toSrt(message.cues);
     const cues = SubtitleCore.parseSubtitles(srt);
     const cacheKey = 'translation:browser-srt-v2:' + await digest(JSON.stringify([SubtitleCore.revision, browserModel, ...(remote ? [remote.url] : []), srt]));
-    const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
+    const cached = await TranslationCache.get(cacheKey, sender);
     if (cached && browserModel !== 'current') return { done: true, cached: true, texts: SubtitleCore.validateTranslations(cached.map((text, id) => ({ id, text })), cues.length) };
     const old = await webRead();
     if (old && ['preparing', 'ready', 'waiting'].includes(old.state)) {
@@ -99,7 +99,7 @@ async function webHandle(message, sender) {
         try {
           if (typeof remote.raw !== 'string' || remote.raw.length > 4000000) throw new Error('n8n returned an invalid subtitle response.');
           job.texts = BrowserSubtitleCore.parseReply(remote.raw, job.id, job.cues);
-          await chrome.storage.local.set({ [job.cacheKey]: job.texts });
+          await TranslationCache.put(job.cacheKey, job.texts, { tab: { id: job.ownerTab }, url: job.ownerUrl });
           job.state = 'done';
         } catch (error) { job.state = 'error'; job.error = error.message; delete job.texts; }
         job.srt = ''; job.cues = []; job.updated = Date.now(); await webSave(job);
@@ -125,12 +125,12 @@ async function webHandle(message, sender) {
   if (message.type === 'WEB_TASK') return { id: job.id, state: job.state, expectedEmail: job.expectedEmail, accountIndex: job.accountIndex, browserModel: job.browserModel || 'argon-medium', srt: job.state === 'ready' ? job.srt : undefined, prompt: job.state === 'ready' ? BrowserSubtitleCore.prompt(job.id, job.cues.length) : undefined, error: job.error };
   if (message.id !== job.id) throw new Error('Stale Gemini response.');
   if (message.type === 'WEB_SENT' && job.state === 'ready') {
-    job.state = 'waiting'; job.status = 'The whole SRT is being translated in Gemini. Waiting for the complete reply…'; job.updated = Date.now(); await webSave(job); return { claimed: true };
+    job.state = 'waiting'; job.srt = ''; job.status = 'The whole SRT is being translated in Gemini. Waiting for the complete reply…'; job.updated = Date.now(); await webSave(job); return { claimed: true };
   }
   if (message.type === 'WEB_RESULT' && job.state === 'waiting') {
     if (typeof message.raw !== 'string' || message.raw.length > 4000000) throw new Error('Invalid Gemini response.');
     const texts = BrowserSubtitleCore.parseReply(message.raw, job.id, job.cues);
-    await chrome.storage.local.set({ [job.cacheKey]: texts });
+    await TranslationCache.put(job.cacheKey, texts, { tab: { id: job.ownerTab }, url: job.ownerUrl });
     job.state = 'done'; job.texts = texts; job.srt = ''; job.cues = []; job.updated = Date.now(); await webSave(job); return { done: true };
   }
   if (message.type === 'WEB_ERROR' && ['ready', 'waiting'].includes(job.state)) {

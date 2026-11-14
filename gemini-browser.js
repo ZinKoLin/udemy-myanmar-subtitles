@@ -1,6 +1,8 @@
 ((transport) => {
   // The worker binds one dedicated Gemini tab to one Udemy job. Other Gemini chats stay untouched.
-  let busy = false, stopped = false, lastRaw = '', stableSince = 0, idleCount = 0, wakePending = false;
+  let busy = false, stopped = false, lastRaw = '', stableSince = 0, idleCount = 0, wakePending = false, pollTimer;
+  function startPolling() { if (!pollTimer) pollTimer = setInterval(tick, 1500); }
+  function stopPolling() { clearInterval(pollTimer); pollTimer = null; lastRaw = ''; }
   const notice = document.createElement('div');
   notice.style.cssText = 'position:fixed;bottom:12px;left:12px;max-width:420px;z-index:2147483647;background:#132438;color:#fff;border:1px solid #90b7da;padding:12px;border-radius:8px;font:14px/1.7 "Myanmar Text",sans-serif;white-space:pre-line';
   const send = async message => {
@@ -102,7 +104,8 @@
   function responseText(id) {
     // Only model responses; never accept the prompt, sidebar, or unrelated chat text.
     const nodes = Array.from(document.querySelectorAll('model-response .markdown, model-response message-content, .model-response-text'));
-    for (const node of nodes) {
+    // Only the latest response can belong to the current job. Avoid materializing old chat history.
+    for (const node of nodes.slice(-1)) {
       const text = node.innerText || node.textContent || '';
       if (!text.includes(`BEGIN_${id}`) || !text.includes(`END_${id}`)) continue;
       // Rendered code blocks include language labels and Copy buttons. Read only the code, keeping job markers.
@@ -141,14 +144,19 @@
       display(error.message);
       if (task?.id) { try { await send({ type: 'WEB_ERROR', id: task.id, error: error.message }); } catch {} }
       stopped = true;
-    } finally { busy = false; if (wakePending) { wakePending = false; stopped = false; tick(); } }
+    } finally {
+      busy = false;
+      if (wakePending) { wakePending = false; stopped = false; startPolling(); tick(); }
+      else if (stopped) stopPolling();
+    }
   }
   // Idle between jobs without polling the worker. A new lecture wakes this same chat adapter.
   if (typeof chrome !== 'undefined' && chrome.runtime?.id) chrome.runtime.onMessage?.addListener((message, sender, respond) => {
     if (message?.type !== 'BROWSER_JOB_AVAILABLE') return false;
     stopped = false; lastRaw = ''; stableSince = 0; idleCount = 0;
+    startPolling();
     if (busy) wakePending = true; else tick(); respond?.({ ok: true }); return false;
   });
-  setInterval(() => { if (!stopped) tick(); }, 1500);
+  startPolling();
   tick();
 })(typeof chrome !== 'undefined' && chrome.runtime?.id ? message => chrome.runtime.sendMessage(message) : globalThis.__udemySubtitleTransport);

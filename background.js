@@ -1,4 +1,4 @@
-importScripts('core.js', 'gemini.js', 'browser-core.js', 'n8n-client.js', 'browser-background.js');
+importScripts('core.js', 'gemini.js', 'browser-core.js', 'n8n-client.js', 'cache-store.js', 'browser-background.js');
 const pending = new Map();
 const modelTimeoutCooldown = 10 * 60 * 1000;
 const ready = chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
@@ -6,7 +6,7 @@ async function digest(text) {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return Array.from(new Uint8Array(bytes), n => n.toString(16).padStart(2, '0')).join('');
 }
-async function translate(texts) {
+async function translate(texts, sender) {
   await ready;
   if (!Array.isArray(texts) || !texts.length || texts.length > 24 || texts.some(t => typeof t !== 'string' || !t.trim() || t.length > 6000) || texts.join('').length > 24000) throw new Error('Invalid subtitle text or batch size.');
   const settings = await chrome.storage.local.get(['model', 'fallbackModels', 'autoModelFallback']);
@@ -26,14 +26,14 @@ async function translate(texts) {
     let lastError;
     for (const model of order) {
     const key = 'translation:' + await digest(JSON.stringify([SubtitleCore.revision, model, texts]));
-    let cached = (await chrome.storage.local.get(key))[key];
+    let cached = await TranslationCache.get(key, sender);
     // Reuse the previous version's 12-line batches when both halves are saved.
     if (!cached && texts.length > 12) {
       const halves = [];
       for (let offset = 0; offset < texts.length; offset += 12) {
         const part = texts.slice(offset, offset + 12);
         const oldKey = 'translation:' + await digest(JSON.stringify([SubtitleCore.revision, model, part]));
-        const old = (await chrome.storage.local.get(oldKey))[oldKey];
+        const old = await TranslationCache.get(oldKey, sender);
         if (!old) break;
         halves.push(...SubtitleCore.validateTranslations(old.map((text, id) => ({ id, text })), part.length));
       }
@@ -70,7 +70,7 @@ async function translate(texts) {
     let parsed;
     try { parsed = JSON.parse(candidates.flatMap(candidate => candidate.content?.parts || []).filter(part => !part.thought).map(p => p.text || '').join('')); } catch { throw new Error('Could not read the Gemini response. Try again.'); }
     const translated = SubtitleCore.validateTranslations(parsed, texts.length);
-    try { await chrome.storage.local.set({ [key]: translated }); }
+    try { await TranslationCache.put(key, translated, sender); }
     catch { throw new Error('Storage is full. Clear the translation cache in settings and try again.'); }
     delete cooldowns[model];
     await chrome.storage.local.set({ modelRouting: { policy, cooldowns, successfulModel: model } });
@@ -85,6 +85,11 @@ async function translate(texts) {
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (browserMessage(message, sender, respond)) return true;
   if (sender.id !== chrome.runtime.id || !message) return false;
+  if (message.type === 'CLEAN_CACHE') {
+    if (sender.url !== chrome.runtime.getURL('popup.html')) return false;
+    ready.then(() => TranslationCache.cleanup(true)).then(removed => respond({ ok: true, removed }), error => respond({ ok: false, error: error.message }));
+    return true;
+  }
   if (message.type === 'LIST_MODELS') {
     if (sender.url !== chrome.runtime.getURL('popup.html')) return false;
     ready.then(() => GeminiProvider.listModels()).then(models => respond({ ok: true, models }), error => respond({ ok: false, error: error.message }));
@@ -102,6 +107,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     })().then(preferences => respond({ ok: true, preferences }), () => respond({ ok: false, error: 'Could not save subtitle settings.' }));
     return true;
   }
-  translate(message.texts).then(result => respond({ ok: true, ...result }), error => respond({ ok: false, error: error.message }));
+  translate(message.texts, sender).then(result => respond({ ok: true, ...result }), error => respond({ ok: false, error: error.message }));
   return true;
+});
+// Alarms survive worker suspension; no permanent background timer is needed.
+ready.then(async () => {
+  if (!await chrome.alarms.get('subtitle-cache-cleanup')) await chrome.alarms.create('subtitle-cache-cleanup', { delayInMinutes: 1, periodInMinutes: 60 });
+}).catch(() => {});
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === 'subtitle-cache-cleanup') ready.then(() => TranslationCache.cleanup()).catch(() => {});
 });

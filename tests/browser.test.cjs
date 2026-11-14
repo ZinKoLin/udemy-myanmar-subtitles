@@ -21,17 +21,18 @@ test('partial replies, wrong job, duplicate IDs, blank cues fail closed', () => 
 function setup(saved = { geminiAccountIndex: 2, geminiAccountEmail: 'pro@example.com' }) {
   let created = 0, calls = 0;
   const context = vm.createContext({
-    SubtitleCore: core, BrowserSubtitleCore: browser, ready: Promise.resolve(), URL, Date, crypto: globalThis.crypto,
+    SubtitleCore: core, BrowserSubtitleCore: browser, ready: Promise.resolve(), URL, Date, TextEncoder, crypto: globalThis.crypto,
     digest: async value => require('node:crypto').createHash('sha256').update(value).digest('hex'),
     AbortSignal,
     fetch: async () => { calls++; throw new Error('No network allowed'); },
     chrome: {
       runtime: { id: 'test' },
-      storage: { local: { async get(keys) { return Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(k => [k, structuredClone(saved[k])])); }, async set(data) { Object.assign(saved, structuredClone(data)); } } },
+      storage: { local: { async get(keys) { if (keys === null) return structuredClone(saved); return Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(k => [k, structuredClone(saved[k])])); }, async set(data) { Object.assign(saved, structuredClone(data)); }, async remove(keys) { for (const key of keys) delete saved[key]; } } },
       permissions: { async contains() { return true; } },
-      tabs: { async create(options) { created++; assert.match(options.url, /^https:\/\/gemini.google.com\/u\/2\/app(?:\/[^#]+)?#udemy-srt=/); return { id: 99 }; }, async get(id) { return { id, url: saved.geminiBrowserSession?.chatUrl || 'https://gemini.google.com/u/2/app' }; }, async sendMessage() { return { ok: true }; }, async reload() {} }
+      tabs: { async query() { return [{ id: 1, url: 'https://www.udemy.com/course/test/learn/lecture/1' }]; }, async create(options) { created++; assert.match(options.url, /^https:\/\/gemini.google.com\/u\/2\/app(?:\/[^#]+)?#udemy-srt=/); return { id: 99 }; }, async get(id) { return { id, url: saved.geminiBrowserSession?.chatUrl || 'https://gemini.google.com/u/2/app' }; }, async sendMessage() { return { ok: true }; }, async reload() {} }
     }
   });
+  vm.runInContext(fs.readFileSync(require.resolve('../cache-store.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(require.resolve('../n8n-client.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(require.resolve('../browser-background.js'), 'utf8'), context);
   const udemy = { id: 'test', tab: { id: 1 }, url: 'https://www.udemy.com/course/test/learn/lecture/1' };

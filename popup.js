@@ -120,10 +120,9 @@ document.querySelector('#open').addEventListener('click', async () => {
 });
 document.querySelector('#clear').addEventListener('click', async () => {
   try {
-    const all = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter(key => key.startsWith('translation:'));
-    await chrome.storage.local.remove(keys);
-    status.textContent = 'Cleared ' + keys.length + ' cached batches. Reload the lecture.';
+    const reply = await chrome.runtime.sendMessage({ type: 'CLEAN_CACHE' });
+    if (!reply?.ok) throw new Error(reply?.error || 'Could not clear old cache.');
+    status.textContent = 'Cache အဟောင်း ' + reply.removed + ' ခု ရှင်းပြီးပါပြီ။ ဖွင့်ထားသော သင်ခန်းစာများနှင့် account settings မဖျက်ပါ။';
   } catch { status.textContent = 'Could not clear the cache.'; }
 });
 load().catch(() => { status.textContent = 'Could not load settings. Reopen the extension.'; });

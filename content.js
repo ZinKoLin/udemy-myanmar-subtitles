@@ -1,7 +1,7 @@
 (() => {
   let video = null, sourceUrl = location.pathname, cues = [], translations = new Map(), generation = 0, running = false;
   let imported = false, visible = true, lastScan = 0, ownedTrack = null, lastCaptionIndex = -1, discovering = null;
-  let browserJobId = null, waitingForFullSrt = false;
+  let browserJobId = null, waitingForFullSrt = false, renderDirty = true, lastRendered = '', lastMediaCheck = 0, lastVideoBounds = '';
   let preferences = SubtitleCore.preferences(), settingsReady = false, autoBusy = false, autoStarted = false, autoAttempts = 0, nextAutoAt = Date.now() + 1800, mediaSource = '';
   const host = document.createElement('div');
   host.style.cssText = 'position:fixed;right:18px;top:80px;z-index:2147483646;';
@@ -143,6 +143,7 @@
   const nativeCaptionStyle = document.createElement('style');
   document.documentElement.append(nativeCaptionStyle);
   function applyPreferences() {
+    renderDirty = true;
     autoToggle.checked = preferences.autoTranslate;
     size.value = String(preferences.fontSize); color.value = preferences.fontColor;
     position.value = String(preferences.verticalPosition); positionValue.textContent = `${preferences.verticalPosition}%`;
@@ -161,6 +162,7 @@
   color.addEventListener('input', () => { burmese.style.color = color.value; });
   color.addEventListener('change', savePreferences);
   position.addEventListener('input', () => {
+    renderDirty = true;
     preferences.verticalPosition = Number(position.value);
     positionValue.textContent = `${preferences.verticalPosition}%`;
   });
@@ -436,8 +438,18 @@
     } catch (error) { autoStarted = true; status.textContent = error.message; }
     finally { autoBusy = false; }
   }
+  document.addEventListener('scroll', () => { renderDirty = true; }, true);
+  document.addEventListener('fullscreenchange', () => { renderDirty = true; });
+  window.addEventListener('resize', () => { renderDirty = true; });
   setInterval(() => {
-    const next = Array.from(document.querySelectorAll('video')).find(v => v.getBoundingClientRect().width > 150) || null;
+    const scanMedia = Date.now() - lastMediaCheck >= 1000 || location.pathname !== sourceUrl;
+    if (scanMedia) lastMediaCheck = Date.now();
+    const next = scanMedia ? Array.from(document.querySelectorAll('video')).find(v => v.getBoundingClientRect().width > 150) || null : video;
+    if (scanMedia && next) {
+      const rect = next.getBoundingClientRect(), bounds = [rect.left, rect.top, rect.width, rect.height].join(':');
+      if (bounds !== lastVideoBounds) renderDirty = true;
+      lastVideoBounds = bounds;
+    }
     const nextSource = next?.currentSrc || '';
     if (location.pathname !== sourceUrl || next !== video || nextSource !== mediaSource) {
       reset(); sourceUrl = location.pathname; video = next; mediaSource = nextSource;
@@ -449,6 +461,10 @@
       lastScan = Date.now(); const found = readTrack();
       if (found.length) { cues = found; status.textContent = `Found ${cues.length} English subtitle lines. Click Translate.`; }
     }
+    // Paused lectures keep their cues in memory without rebuilding the same caption.
+    const frame = [video.currentTime, generation, translations.size, visible].join(':');
+    if (!renderDirty && frame === lastRendered) return;
+    renderDirty = false; lastRendered = frame;
     const time = video.currentTime;
     const active = [];
     // Include overlapping cues and remove captions during silent gaps and after seeking.
@@ -471,7 +487,7 @@
     overlay.style.display = 'block'; overlay.style.left = `${rect.left}px`; overlay.style.width = `${rect.width}px`;
     const text = active.map(i => translations.get(i) || '').filter(Boolean).join('\n');
     if (!text) { overlay.style.display = 'none'; return; }
-    burmese.textContent = text;
+    if (burmese.textContent !== text) burmese.textContent = text;
     // Keep the whole caption inside the video, even at either end of the slider.
     const bottom = Math.max(rect.top + Math.min(overlay.offsetHeight + 8, rect.height - 8), Math.min(rect.bottom - 8, rect.bottom - rect.height * preferences.verticalPosition / 100));
     overlay.style.top = `${bottom}px`; overlay.style.transform = 'translateY(-100%)';

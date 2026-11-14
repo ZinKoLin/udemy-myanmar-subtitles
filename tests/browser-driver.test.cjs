@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 async function driver(options = {}) {
-  let tick, wake, now = 0, uploads = 0, clicks = 0, state = 'ready', response = '', result, failure;
+  let tick, wake, now = 0, uploads = 0, clicks = 0, state = 'ready', response = '', result, failure, timerActive = false;
   const fileList = [];
   const task = { id: 'job', expectedEmail: 'pro@example.com', accountIndex: 2, browserModel: options.model || 'argon-medium', srt: '1\n00:00:00,000 --> 00:00:02,000\nHello\n', prompt: 'Translate the whole file.' };
   const element = label => ({ style: {}, textContent: '', isConnected: false, getAttribute: name => name === 'aria-label' ? label : null, getClientRects: () => [{}], classList: { contains: () => false }, focus() {}, dispatchEvent() {} });
@@ -25,7 +25,7 @@ async function driver(options = {}) {
     location: { hash: '#udemy-srt=job' },
     Date: class extends Date { static now() { return now; } },
     getComputedStyle: () => ({ visibility: 'visible' }),
-    setInterval(fn) { tick = fn; return 1; }, clearInterval() {},
+    setInterval(fn) { tick = fn; timerActive = true; return 1; }, clearInterval() { timerActive = false; },
     setTimeout(fn, ms) { now += ms; if (options.hydrating && ms === 400) box.textContent = ''; queueMicrotask(fn); },
     Event: class {}, InputEvent: class {}, File: require('node:buffer').File,
     DataTransfer: class { constructor() { this.files = []; this.items = { add: file => this.files.push(file) }; } },
@@ -38,7 +38,7 @@ async function driver(options = {}) {
         if (selector === 'button') return [picker, sendButton];
         if (selector === '[role="menuitemradio"]' && options.model) return [modelChoice];
         if (selector.includes('input[type=')) return [input];
-        if (selector.startsWith('model-response')) return response ? [{ innerText: response, querySelectorAll: () => options.codeBlock ? [{ textContent: task.srt }] : [] }] : [];
+        if (selector.startsWith('model-response')) return response ? [...(options.oldHistory ? Array.from({length: 100}, () => ({ get innerText() { throw new Error('Old chat text must not be read'); } })) : []), { innerText: response, querySelectorAll: () => options.codeBlock ? [{ textContent: task.srt }] : [] }] : [];
         return [];
       }
     },
@@ -52,7 +52,7 @@ async function driver(options = {}) {
   });
   vm.runInContext(fs.readFileSync(require.resolve('../gemini-browser.js'), 'utf8'), context);
   await flush();
-  return { fileList, task, get uploads() { return uploads; }, get clicks() { return clicks; }, get failure() { return failure; }, get result() { return result; }, async poll(text) { if (text !== undefined) response = text; now += 2000; tick(); await flush(); }, async nextJob() { task.id = 'job2'; state = 'ready'; response = ''; result = undefined; wake({ type: 'BROWSER_JOB_AVAILABLE' }); await flush(); } };
+  return { fileList, task, get timerActive() { return timerActive; }, get uploads() { return uploads; }, get clicks() { return clicks; }, get failure() { return failure; }, get result() { return result; }, async poll(text) { if (text !== undefined) response = text; now += 2000; tick(); await flush(); }, async nextJob() { task.id = 'job2'; state = 'ready'; response = ''; result = undefined; wake({ type: 'BROWSER_JOB_AVAILABLE' }); await flush(); } };
 }
 test('browser uploads exactly one complete SRT and waits for a stable complete marked response', async () => {
   const app = await driver();
@@ -105,4 +105,12 @@ test('manual model selection preserves the Gemini choice and a limited model nev
   assert.equal(manual.uploads, 1); assert.equal(manual.clicks, 1);
   const limited = await driver({ model: 'flash-lite', limited: true });
   assert.equal(limited.uploads, 0); assert.equal(limited.clicks, 0); assert.match(limited.failure, /limit/);
+});
+test('completed adapters release their timer, skip old chat text, and wake on the next lecture', async () => {
+  const app = await driver({oldHistory: true});
+  assert.equal(app.timerActive, true);
+  await app.poll('BEGIN_job\ncomplete\nEND_job'); await app.poll(); await app.poll();
+  assert.equal(app.result, 'BEGIN_job\ncomplete\nEND_job'); assert.equal(app.failure, undefined);
+  assert.equal(app.timerActive, false);
+  await app.nextJob(); assert.equal(app.timerActive, true); assert.equal(app.uploads, 2);
 });
