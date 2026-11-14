@@ -133,3 +133,28 @@ test('an offline server cannot block switching back to a local translation metho
   const local = await app.send({ type: 'WEB_START', cues });
   assert.equal(local.ok, true); assert.equal(app.created, 1); assert.equal(app.saved.browserSubtitleJob.mode, 'browser');
 });
+
+test('Hydrogen Medium defaults, model changes isolate cache and late replies cannot replace the new job', async () => {
+  const app = setup();
+  assert.equal((await app.send({ type: 'GET_PROVIDER' })).browserModel, 'hydrogen-medium');
+  const first = await app.send({ type: 'WEB_START', cues });
+  assert.equal((await app.send({ type: 'WEB_TASK' }, app.gemini)).browserModel, 'hydrogen-medium');
+  await app.send({ type: 'WEB_SENT', id: first.id }, app.gemini);
+  await app.send({ type: 'WEB_RESULT', id: first.id, raw: reply(first.id) }, app.gemini);
+  assert.equal((await app.send({ type: 'SET_BROWSER_MODEL', model: 'flash-lite' })).browserModel, 'flash-lite');
+  const next = await app.send({ type: 'WEB_START', cues });
+  assert.equal(next.cached, undefined); assert.notEqual(next.id, first.id);
+  assert.equal((await app.send({ type: 'WEB_TASK' }, app.gemini)).browserModel, 'flash-lite');
+  assert.equal((await app.send({ type: 'WEB_RESULT', id: first.id, raw: reply(first.id) }, app.gemini)).ok, false);
+  assert.equal((await app.send({ type: 'SET_BROWSER_MODEL', model: 'bad' })).ok, false);
+  assert.equal(await app.send({ type: 'SET_BROWSER_MODEL', model: 'current' }, app.gemini), false);
+});
+test('manual Gemini model mode never reuses translations from a previous manually chosen model', async () => {
+  const app = setup();
+  await app.send({ type: 'SET_BROWSER_MODEL', model: 'current' });
+  const first = await app.send({ type: 'WEB_START', cues });
+  await app.send({ type: 'WEB_SENT', id: first.id }, app.gemini);
+  await app.send({ type: 'WEB_RESULT', id: first.id, raw: reply(first.id) }, app.gemini);
+  const next = await app.send({ type: 'WEB_START', cues });
+  assert.notEqual(next.id, first.id); assert.equal(next.cached, undefined);
+});

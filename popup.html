@@ -7,7 +7,7 @@
   <select id="translation-provider"><option value="browser">Gemini browser — full SRT, no API key</option><option value="api">Gemini API — original method</option><option value="n8n">n8n server — Gemini web on server</option></select>
   <small>Both methods remain available. Switching methods keeps your saved API keys, models and Pro account settings.</small>
   <div id="browser-hint">
-    <p>Uses only your configured Pro account with Argon / Medium. Sends one complete SRT file and waits for the entire translation. Reuses the same Gemini chat for later lectures. A ready notice appears on Udemy even when its settings are collapsed.</p>
+    <p>သင့် Pro အကောင့်မှ SRT ဖိုင်တစ်ခုလုံးကို ဘာသာပြန်ပြီး chat တစ်ခုတည်းကို ဆက်သုံးပါသည်။ Model limit ဖြစ်လျှင် အောက်တွင် ပြောင်းရွေးနိုင်ပါသည်။</p>
     <form id="browser-account-settings">
       <label for="gemini-account-index">Pro account number in Gemini URL (/u/2/ means 2)</label>
       <input id="gemini-account-index" type="number" min="0" max="20" value="2" required>
@@ -15,10 +15,15 @@
       <input id="gemini-account-email" type="email" autocomplete="off" required>
       <button type="submit">Save Pro account</button>
     </form>
-    <small>Argon Medium must be available in this account. No automatic account or model fallback.</small>
+    <small>သင့် Pro အကောင့်ကိုသာ သုံးပါသည်။ Model တစ်ခုချင်းစီ၏ အသုံးပြုခွင့်နှင့် limit သက်ရောက်ပါသည်။</small>
+  </div>
+  <div id="browser-model-settings">
+    <label for="browser-model">Gemini browser model</label>
+    <select id="browser-model"><option value="hydrogen-medium">Hydrogen Medium (မူလ)</option><option value="argon-medium">Argon Medium</option><option value="flash-lite">Flash-Lite</option><option value="current">Gemini မှာ ကိုယ်တိုင်ရွေးထားသည့် model</option></select>
+    <small>ရွေးလိုက်သည်နှင့် သိမ်းပါသည်။ Udemy မှာ Translate ပြန်နှိပ်ပါ။ နောက်ဆုံးနည်းလမ်းကို သုံးလျှင် dedicated Gemini chat ထဲမှာ model ကို အရင်ရွေးပါ။ n8n အတွက် server package အသစ်ကို တပ်ဆင်ထားရန် လိုပါသည်။</small>
   </div>
   <div id="n8n-hint" hidden>
-    <p>n8n sends the full SRT to your server browser using your Pro account / Argon Medium. No Gemini tab opens on this computer.</p>
+    <p>n8n sends the full SRT to your server browser using your Pro account and selected browser model. No Gemini tab opens on this computer.</p>
     <form id="n8n-settings">
       <label for="n8n-url">n8n production webhook URL</label><input id="n8n-url" type="url" placeholder="https://n8n.example.com/webhook/udemy-srt" required>
       <label for="n8n-token">Webhook access token (not a Gemini API key)</label><input id="n8n-token" type="password" autocomplete="off" required>

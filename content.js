@@ -51,14 +51,32 @@
     const option = element('option', title, method); option.value = value;
   }
   const methodHelp = element('small', '', panel);
+  const browserModelLabel = element('label', 'Gemini browser model ', panel); browserModelLabel.style.display = 'block';
+  const browserModel = element('select', '', browserModelLabel); browserModel.setAttribute('aria-label', 'Gemini browser model'); browserModel.disabled = true;
+  for (const [value, title] of [['hydrogen-medium', 'Hydrogen Medium (မူလ)'], ['argon-medium', 'Argon Medium'], ['flash-lite', 'Flash-Lite'], ['current', 'Gemini မှာ ကိုယ်တိုင်ရွေးထားသည့် model']]) {
+    const option = element('option', title, browserModel); option.value = value;
+  }
+  element('small', 'Model limit ဖြစ်လျှင် ပြောင်းရွေးပြီး Translate ပြန်နှိပ်ပါ။ ကိုယ်တိုင်ရွေးသည့်နည်းမှာ Gemini chat ထဲတွင် model ကို အရင်ရွေးပါ။', browserModelLabel);
+  browserModel.addEventListener('change', async () => {
+    browserModel.disabled = true;
+    try {
+      const reply = await chrome.runtime.sendMessage({ type: 'SET_BROWSER_MODEL', model: browserModel.value });
+      if (!reply?.ok) throw new Error(reply?.error || 'Model ကို မသိမ်းနိုင်ပါ။');
+      browserModelChanged();
+      status.textContent = 'Model ပြောင်းပြီးပါပြီ။ Translate ပြန်နှိပ်ပါ။';
+    } catch (error) { status.textContent = error.message; }
+    finally { await refreshMethod().catch(() => {}); }
+  });
   function showMethod(provider) {
     method.value = ['api', 'n8n'].includes(provider) ? provider : 'browser';
-    methodHelp.textContent = method.value === 'api' ? 'Original API translation: 24 lines per request. Configure keys and models in the extension popup.' : method.value === 'n8n' ? 'Full SRT through n8n. Gemini runs on your server; no Gemini tab opens here. Configure n8n in the extension popup.' : 'Your Pro account / Argon Medium: sends the full SRT in one file using a Gemini tab.';
+    browserModelLabel.hidden = method.value === 'api';
+    methodHelp.textContent = method.value === 'api' ? 'Original API translation: 24 lines per request. Configure keys and models in the extension popup.' : method.value === 'n8n' ? 'Full SRT through n8n. Gemini runs on your server; no Gemini tab opens here. Configure n8n in the extension popup.' : 'သင့် Pro အကောင့်နှင့် ရွေးထားသည့် model ဖြင့် SRT တစ်ဖိုင်လုံး ပို့ပါသည်။';
   }
   async function refreshMethod() {
     const reply = await chrome.runtime.sendMessage({ type: 'GET_PROVIDER' });
     if (!reply?.ok) throw new Error('Could not load the translation method. Reload this lecture.');
     showMethod(reply.provider); method.disabled = false;
+    browserModel.value = reply.browserModel || 'hydrogen-medium'; browserModel.disabled = false;
   }
   method.addEventListener('change', async () => {
     const provider = method.value;
@@ -363,6 +381,7 @@
   });
   chrome.runtime.onMessage.addListener(message => {
     if (message?.type === 'SHOW_PANEL') setPanelOpen(true);
+    if (message?.type === 'BROWSER_MODEL_CHANGED') browserModelChanged();
     if (message?.type === 'MODEL_CHANGED') {
       refreshMethod().catch(() => {});
       cancel(); translations.clear(); clearReady(); autoStarted = false; autoAttempts = 0; nextAutoAt = Date.now();
@@ -370,6 +389,11 @@
       status.textContent = 'Model settings changed. Preparing subtitles…';
     }
   });
+  function browserModelChanged() {
+    cancel(); translations.clear(); clearReady(); overlay.style.display = 'none'; autoStarted = true;
+    refreshMethod().catch(() => {});
+    status.textContent = 'Model ပြောင်းပြီးပါပြီ။ Translate ပြန်နှိပ်ပါ။';
+  }
   async function ensureEnglish() {
     const menu = document.querySelector('[data-purpose="captions-dropdown-menu"]');
     const choices = Array.from(menu?.querySelectorAll('[role="menuitemradio"]') || []);

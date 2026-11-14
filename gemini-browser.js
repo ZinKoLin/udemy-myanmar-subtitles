@@ -37,7 +37,7 @@
       if (current.id !== task.id || current.state !== 'ready') return;
       throw new Error('The dedicated Gemini tab already contains a draft or active response. Finish or clear it, then retry from Udemy.');
     }
-    await selectArgonMedium();
+    await selectModel(task.browserModel || 'argon-medium');
     const findInput = () => Array.from(document.querySelectorAll('input[type="file"]')).find(e => (e.accept || '').includes('.srt'));
     let input = findInput();
     if (!input) {
@@ -71,21 +71,31 @@
     button.click();
     display('SRT ဖိုင်တစ်ခုလုံးကို ဘာသာပြန်နေပါသည်။\nအဖြေအကုန်ရလျှင် Udemy သို့ အလိုအလျောက် ပြန်ပို့ပါမည်။');
   }
-  async function selectArgonMedium() {
+  async function selectModel(model) {
+    if (model === 'current') return;
+    if (!['hydrogen-medium', 'argon-medium', 'flash-lite'].includes(model)) throw new Error('Unknown Gemini browser model.');
     const picker = () => buttons().find(e => /open mode picker/i.test(e.getAttribute('aria-label') || ''));
-    const selected = () => /currently (?:4 )?Argon Medium$/i.test(picker()?.getAttribute('aria-label') || '');
+    const selected = () => (model === 'flash-lite' ? /currently (?:3\.5 )?Flash[\s-]?Lite$/i : (model === 'hydrogen-medium' ? /currently (?:[\d.]+ )?Hydrogen Medium$/i : /currently (?:4 )?Argon Medium$/i)).test(picker()?.getAttribute('aria-label') || '');
     if (selected()) return;
     const mode = await waitFor(picker);
     mode.click();
     const choices = role => Array.from(document.querySelectorAll(`[role="${role}"]`)).filter(visible);
-    const argon = await waitFor(() => choices('menuitemradio').find(e => /\bArgon\b/i.test(e.textContent)));
-    argon.click();
+    const choice = await waitFor(() => {
+      const options = choices('menuitemradio');
+      const match = options.find(e => (model === 'flash-lite' ? /\bFlash[\s-]?Lite\b/i : (model === 'hydrogen-medium' ? /\bHydrogen\b/i : /\bArgon\b/i)).test(e.textContent));
+      if (options.length && !match) throw new Error('ရွေးထားသည့် model ကို Gemini menu မှာ မရနိုင်ပါ။ Limit အခြေအနေ စစ်ပါ။ Udemy မှာ model ပြောင်းပါ၊ သို့မဟုတ် Gemini မှာ ကိုယ်တိုင်ရွေးသည့်နည်း သုံးပါ။');
+      return match;
+    });
+    if (choice.getAttribute('aria-disabled') === 'true' || choice.disabled) throw new Error('ရွေးထားသည့် model သည် limit ပြည့်နေပါသည်။ Udemy မှာ Gemini browser model ကို ပြောင်းပြီး Translate ပြန်နှိပ်ပါ။');
+    choice.click();
     await new Promise(resolve => setTimeout(resolve, 500));
     if (selected()) return;
+    if (model === 'flash-lite') { await waitFor(selected); return; }
     picker()?.click();
     const thinking = await waitFor(() => choices('menuitem').find(e => /thinking level/i.test(e.textContent)));
     thinking.click();
     const medium = await waitFor(() => choices('menuitemradio').find(e => /^\s*Medium\b/i.test(e.textContent)));
+    if (medium.getAttribute('aria-disabled') === 'true' || medium.disabled) throw new Error('ရွေးထားသည့် Medium model limit ပြည့်နေပါသည်။ Udemy မှာ Flash-Lite သို့မဟုတ် Gemini မှာ ရွေးထားသည့် model ကို ပြောင်းပြီး Translate ပြန်နှိပ်ပါ။');
     medium.click();
     await waitFor(selected);
   }

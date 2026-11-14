@@ -1,3 +1,5 @@
+> Version 0.7.0: browser model ရွေးချယ်မှုကို job နှင့်အတူ လက်ခံပါသည်။ မူလမှာ Hydrogen Medium ဖြစ်ပါသည်။ Server package ကို update လုပ်ပြီး container ကို rebuild လုပ်ပါ။ ယခင် Argon Medium ဟု ဖော်ပြထားသည့် နေရာများသည် မူလ version 0.6.0 အတွက် ဖြစ်ပါသည်။
+
 # n8n + Server Gemini browser တပ်ဆင်ရန်
 
 ဤဖိုင်များသည် **တပ်ဆင်ရန်ပြင်ဆင်ထားသော package** ဖြစ်ပါသည်။ Server မရှိသေးသဖြင့် deploy မလုပ်ထားပါ။ ဒီစက်တွင် Docker မရှိသဖြင့် container build နှင့် server ပေါ်က Google login ကို လက်တွေ့မစမ်းရသေးပါ။ n8n workflow ဖွဲ့စည်းပုံကို validator ဖြင့်စစ်ပြီး၊ server HTTP/job protocol နှင့် extension ချိတ်ဆက်မှုကို simulated browser ဖြင့် စမ်းထားပါသည်။ Google သည် server browser login ကို ငြင်းနိုင်သောကြောင့် တပ်ဆင်ပြီးမှ အမှန်တကယ် login ဝင်နိုင်မနိုင် စစ်ရပါမည်။

@@ -15,16 +15,17 @@ function webGemini(job, sender) {
 async function webHandle(message, sender) {
   await ready;
   if (message.type === 'WEB_START') {
-    const settings = await chrome.storage.local.get(['translationProvider', 'geminiAccountIndex', 'geminiAccountEmail', 'n8nUrl', 'n8nToken']);
+    const settings = await chrome.storage.local.get(['translationProvider', 'geminiAccountIndex', 'geminiAccountEmail', 'geminiBrowserModel', 'n8nUrl', 'n8nToken']);
     const { translationProvider, geminiAccountIndex, geminiAccountEmail } = settings;
     const remote = translationProvider === 'n8n' ? n8nConnection(settings) : null;
     if (translationProvider === 'api') throw new Error('Choose Gemini browser in extension settings first.');
     if (!remote && (!Number.isInteger(geminiAccountIndex) || geminiAccountIndex < 0 || geminiAccountIndex > 20 || typeof geminiAccountEmail !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(geminiAccountEmail))) throw new Error('Set your Pro account number and email in extension settings first.');
+    const browserModel = BrowserSubtitleCore.model(settings.geminiBrowserModel);
     const srt = BrowserSubtitleCore.toSrt(message.cues);
     const cues = SubtitleCore.parseSubtitles(srt);
-    const cacheKey = 'translation:browser-srt:' + await digest(JSON.stringify([SubtitleCore.revision, 'argon-medium', ...(remote ? [remote.url] : []), srt]));
+    const cacheKey = 'translation:browser-srt:' + await digest(JSON.stringify([SubtitleCore.revision, browserModel, ...(remote ? [remote.url] : []), srt]));
     const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
-    if (cached) return { done: true, cached: true, texts: SubtitleCore.validateTranslations(cached.map((text, id) => ({ id, text })), cues.length) };
+    if (cached && browserModel !== 'current') return { done: true, cached: true, texts: SubtitleCore.validateTranslations(cached.map((text, id) => ({ id, text })), cues.length) };
     const old = await webRead();
     if (old && ['preparing', 'ready', 'waiting'].includes(old.state)) {
       if (webOwner(old, sender) && old.cacheKey === cacheKey && (remote ? old.mode === 'n8n' : old.expectedEmail === geminiAccountEmail.toLowerCase() && old.accountIndex === geminiAccountIndex)) return { id: old.id };
@@ -37,12 +38,12 @@ async function webHandle(message, sender) {
       }
     }
     const id = crypto.randomUUID().replace(/-/g, '');
-    const job = { id, ownerTab: sender.tab.id, ownerUrl: sender.url.split('#')[0], cues, srt, cacheKey, expectedEmail: geminiAccountEmail?.toLowerCase(), accountIndex: geminiAccountIndex, mode: remote ? 'n8n' : 'browser', connection: remote, state: 'preparing', created: Date.now(), updated: Date.now() };
+    const job = { id, ownerTab: sender.tab.id, ownerUrl: sender.url.split('#')[0], cues, srt, cacheKey, expectedEmail: geminiAccountEmail?.toLowerCase(), accountIndex: geminiAccountIndex, mode: remote ? 'n8n' : 'browser', connection: remote, browserModel, state: 'preparing', created: Date.now(), updated: Date.now() };
     await webSave(job);
     try {
       if (remote) {
-        await n8nRequest(remote, { action: 'start', id, srt });
-        job.state = 'waiting'; job.status = 'Full SRT sent to n8n. Gemini is running on your server with Argon Medium.';
+        await n8nRequest(remote, { action: 'start', id, srt, browserModel });
+        job.state = 'waiting'; job.status = 'Full SRT sent to n8n. Gemini is running on your server with the selected model.';
         await webSave(job); return { id };
       }
       const base = `https://gemini.google.com/u/${geminiAccountIndex}/app`;
@@ -121,7 +122,7 @@ async function webHandle(message, sender) {
       await chrome.storage.local.set({ geminiBrowserSession: { ...session, chatUrl: url.origin + url.pathname } });
     }
   }
-  if (message.type === 'WEB_TASK') return { id: job.id, state: job.state, expectedEmail: job.expectedEmail, accountIndex: job.accountIndex, srt: job.state === 'ready' ? job.srt : undefined, prompt: job.state === 'ready' ? BrowserSubtitleCore.prompt(job.id, job.cues.length) : undefined, error: job.error };
+  if (message.type === 'WEB_TASK') return { id: job.id, state: job.state, expectedEmail: job.expectedEmail, accountIndex: job.accountIndex, browserModel: job.browserModel || 'argon-medium', srt: job.state === 'ready' ? job.srt : undefined, prompt: job.state === 'ready' ? BrowserSubtitleCore.prompt(job.id, job.cues.length) : undefined, error: job.error };
   if (message.id !== job.id) throw new Error('Stale Gemini response.');
   if (message.type === 'WEB_SENT' && job.state === 'ready') {
     job.state = 'waiting'; job.status = 'The whole SRT is being translated in Gemini. Waiting for the complete reply…'; job.updated = Date.now(); await webSave(job); return { claimed: true };
@@ -139,12 +140,12 @@ async function webHandle(message, sender) {
   return { idle: true };
 }
 function browserMessage(message, sender, respond) {
-  if (sender.id !== chrome.runtime.id || !message || !['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
+  if (sender.id !== chrome.runtime.id || !message || !['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
   let url; try { url = new URL(sender.url); } catch { return false; }
   const udemy = url.protocol === 'https:' && (url.hostname === 'udemy.com' || url.hostname.endsWith('.udemy.com'));
   const gemini = url.origin === 'https://gemini.google.com';
   if (!sender.tab || (!udemy && !gemini)) return false;
-  if (['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL'].includes(message.type) ? !udemy : !gemini) return false;
+  if (['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL'].includes(message.type) ? !udemy : !gemini) return false;
   const action = message.type === 'FETCH_CAPTION' ? async () => {
     const target = new URL(message.url);
     if (target.protocol !== 'https:' || !(target.hostname === 'udemycdn.com' || target.hostname.endsWith('.udemycdn.com')) || target.username || target.password || (target.port && target.port !== '443')) throw new Error('Unsupported caption file host. Import the original SRT file instead.');
@@ -153,15 +154,23 @@ function browserMessage(message, sender, respond) {
     const text = await response.text();
     if (text.length > 2000000) throw new Error('The caption file is too large.');
     return { text };
-  } : ['GET_PROVIDER', 'SET_PROVIDER'].includes(message.type) ? async () => {
+  } : ['GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL'].includes(message.type) ? async () => {
     await ready;
     if (message.type === 'SET_PROVIDER') {
       if (!['api', 'browser', 'n8n'].includes(message.provider)) throw new Error('Unknown translation method.');
       await chrome.storage.local.set({ translationProvider: message.provider });
     }
-    const s = await chrome.storage.local.get('translationProvider');
-    return { provider: ['api', 'n8n'].includes(s.translationProvider) ? s.translationProvider : 'browser' };
+    if (message.type === 'SET_BROWSER_MODEL') await chrome.storage.local.set({ geminiBrowserModel: BrowserSubtitleCore.model(message.model) });
+    const s = await chrome.storage.local.get(['translationProvider', 'geminiBrowserModel']);
+    return { browserModel: BrowserSubtitleCore.model(s.geminiBrowserModel), provider: ['api', 'n8n'].includes(s.translationProvider) ? s.translationProvider : 'browser' };
   } : () => webHandle(message, sender);
   webSerial(action).then(result => respond({ ok: true, ...result }), error => respond({ ok: false, error: error.message }));
   return true;
 }
+// Send only the model-change signal; trusted storage remains inaccessible to content scripts.
+chrome.storage.onChanged?.addListener((changes, area) => {
+  if (area !== 'local' || !changes.geminiBrowserModel) return;
+  chrome.tabs.query({ url: ['https://*.udemy.com/*', 'https://udemy.com/*'] }).then(tabs => {
+    for (const tab of tabs) chrome.tabs.sendMessage(tab.id, { type: 'BROWSER_MODEL_CHANGED' }).catch(() => {});
+  }).catch(() => {});
+});

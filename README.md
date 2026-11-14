@@ -4,6 +4,16 @@
 
 မှတ်ချက် — အောက်တွင် ဖော်ပြထားသော `evidence/` စမ်းသပ်မှတ်တမ်းများကို ကိုယ်ပိုင်စက်တွင်သာ သိမ်းထားပြီး Git repository တွင် မထည့်ထားပါ။
 
+## Version 0.7.0 — Model ရွေးခြင်းနှင့် Hydrogen Medium default
+
+Gemini browser နှင့် n8n server နည်းလမ်းများအတွက် **Hydrogen Medium** ကို မူလ model အဖြစ် သုံးပါသည်။ Udemy subtitle panel သို့မဟုတ် extension popup မှ **Gemini browser model** တွင် Hydrogen Medium၊ Argon Medium၊ Flash-Lite သို့မဟုတ် Gemini မှာ ကိုယ်တိုင်ရွေးထားသည့် model ကို ရွေးနိုင်ပါသည်။ ရွေးလိုက်သည်နှင့် သိမ်းပြီး လက်ရှိအလုပ်ကို ရပ်ပါသည်။ **Translate** ပြန်နှိပ်မှ model အသစ်ဖြင့် အစအဆုံး ပြန်ပို့ပါသည်။ မူလ API model setting နှင့် Pro account ကို မပြောင်းပါ။
+
+ကိုယ်တိုင်ရွေးသည့်နည်းကို သုံးလျှင် dedicated Gemini chat ထဲတွင် model ကို အရင်ရွေးပါ။ ဤနည်းမှာ model ကို အတိအကျ မသိနိုင်သဖြင့် ယခင်ဘာသာပြန် cache ကို ပြန်မသုံးပါ။ အခြားရွေးချယ်မှုများအတွက် cache ကို model အလိုက် ခွဲသိမ်းပါသည်။ Gemini က model ကို limit ကြောင့် ပိတ်ထားလျှင် ထို limit သည် ဆက်သက်ရောက်ပါသည်။ အလိုအလျောက် model ပြောင်းမသုံးပါ။
+
+n8n အသုံးပြုသူများသည် server package ကိုလည်း update လုပ်ပါ။ Webhook workflow က model ရွေးချယ်မှုကို server သို့ ဆက်ပို့ပါသည်။
+
+လက်တွေ့စမ်းသပ်မှု: v0.7.0 Reload ပြီး Udemy မှ Flash-Lite ပြောင်းရွေး၊ SRT အစအဆုံးပို့၊ အဖြေပြန်ဖတ်နိုင်ခဲ့ပါသည်။ စမ်းသပ်အဖြေတွင် timestamp ပြောင်းထားသဖြင့် strict validation က ပယ်ချပြီး စာတန်းမတင်ခဲ့ပါ။ Hydrogen Medium ကို မူလရွေးချယ်မှုအဖြစ် ပြန်သိမ်းထားပါသည်။ Hydrogen ဖြင့် live ဘာသာပြန်အောင်မြင်မှုကို လက်ရှိ account limit အတွင်း မအတည်ပြုနိုင်သေးပါ။ Automated tests 55 ခုနှင့် syntax checks အောင်ပါသည်။
+
 ## Version 0.6.0 — နည်းလမ်းရွေးချယ်မှု၊ chat တစ်ခုတည်းနှင့် အသင့်ဖြစ်ကြောင်းပြခြင်း
 
 Extension နှင့် Udemy စာမျက်နှာကို Reload တစ်ကြိမ်လုပ်ပါ။ Popup သို့မဟုတ် Udemy subtitle panel မှ နည်းလမ်းသုံးခု ရွေးနိုင်ပါသည်။

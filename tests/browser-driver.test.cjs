@@ -6,12 +6,16 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 async function driver(options = {}) {
   let tick, wake, now = 0, uploads = 0, clicks = 0, state = 'ready', response = '', result, failure;
   const fileList = [];
-  const task = { id: 'job', expectedEmail: 'pro@example.com', accountIndex: 2, srt: '1\n00:00:00,000 --> 00:00:02,000\nHello\n', prompt: 'Translate the whole file.' };
+  const task = { id: 'job', expectedEmail: 'pro@example.com', accountIndex: 2, browserModel: options.model || 'argon-medium', srt: '1\n00:00:00,000 --> 00:00:02,000\nHello\n', prompt: 'Translate the whole file.' };
   const element = label => ({ style: {}, textContent: '', isConnected: false, getAttribute: name => name === 'aria-label' ? label : null, getClientRects: () => [{}], classList: { contains: () => false }, focus() {}, dispatchEvent() {} });
   const box = element('Enter a prompt for Gemini');
   if (options.hydrating) box.textContent = 'Ask Gemini';
   const account = element(options.wrongAccount ? 'Google Account: Other (other@example.com)' : 'Google Account: Pro (pro@example.com)');
-  const picker = element(options.wrongModel ? 'Open mode picker, currently Gemini Auto' : 'Open mode picker, currently Argon Medium');
+  let pickerLabel = options.selected || (options.wrongModel ? 'Open mode picker, currently Gemini Auto' : 'Open mode picker, currently Argon Medium');
+  const picker = element(); picker.getAttribute = name => name === 'aria-label' ? pickerLabel : null;
+  const modelChoice = element(); modelChoice.textContent = options.model === 'hydrogen-medium' ? 'Hydrogen' : 'Quick answers 3.5 Flash-Lite';
+  modelChoice.getAttribute = name => name === 'aria-disabled' ? String(!!options.limited) : null;
+  modelChoice.click = () => { pickerLabel = options.model === 'hydrogen-medium' ? 'Open mode picker, currently Hydrogen Medium' : 'Open mode picker, currently Flash-Lite'; };
   picker.click = () => {};
   const sendButton = element('Send message'); sendButton.click = () => { clicks++; box.textContent = ''; };
   const body = { textContent: '' };
@@ -32,6 +36,7 @@ async function driver(options = {}) {
         if (selector.includes('Google Account:')) return [account];
         if (selector.startsWith('[contenteditable')) return [box];
         if (selector === 'button') return [picker, sendButton];
+        if (selector === '[role="menuitemradio"]' && options.model) return [modelChoice];
         if (selector.includes('input[type=')) return [input];
         if (selector.startsWith('model-response')) return response ? [{ innerText: response, querySelectorAll: () => options.codeBlock ? [{ textContent: task.srt }] : [] }] : [];
         return [];
@@ -87,4 +92,17 @@ test('Gemini editor hydration settles before a full SRT is sent', async () => {
 test('a second adapter cannot upload or send a job already claimed by another adapter', async () => {
   const app = await driver({ alreadyClaimed: true });
   assert.equal(app.uploads, 0); assert.equal(app.clicks, 0); assert.equal(app.failure, undefined);
+});
+
+ test('explicit Flash-Lite and Hydrogen choices select the requested model before uploading', async () => {
+  for (const model of ['flash-lite', 'hydrogen-medium']) {
+    const app = await driver({ model });
+    assert.equal(app.uploads, 1); assert.equal(app.clicks, 1); assert.equal(app.failure, undefined);
+  }
+});
+test('manual model selection preserves the Gemini choice and a limited model never uploads', async () => {
+  const manual = await driver({ model: 'current', wrongModel: true });
+  assert.equal(manual.uploads, 1); assert.equal(manual.clicks, 1);
+  const limited = await driver({ model: 'flash-lite', limited: true });
+  assert.equal(limited.uploads, 0); assert.equal(limited.clicks, 0); assert.match(limited.failure, /limit/);
 });

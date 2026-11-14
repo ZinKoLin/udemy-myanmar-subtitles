@@ -3,15 +3,16 @@
   const api = document.querySelector('#api-settings');
   const hint = document.querySelector('#browser-hint');
   async function load() {
-    const saved = await chrome.storage.local.get(['translationProvider', 'geminiAccountIndex', 'geminiAccountEmail', 'n8nUrl', 'n8nToken']);
+    const saved = await chrome.storage.local.get(['translationProvider', 'geminiAccountIndex', 'geminiAccountEmail', 'geminiBrowserModel', 'n8nUrl', 'n8nToken']);
     provider.value = ['api', 'n8n'].includes(saved.translationProvider) ? saved.translationProvider : 'browser';
     document.querySelector('#n8n-url').value = saved.n8nUrl || '';
     document.querySelector('#n8n-token').value = saved.n8nToken || '';
     document.querySelector('#gemini-account-index').value = saved.geminiAccountIndex ?? 2;
     document.querySelector('#gemini-account-email').value = saved.geminiAccountEmail || '';
+    document.querySelector('#browser-model').value = saved.geminiBrowserModel || 'hydrogen-medium';
     update();
   }
-  function update() { api.hidden = provider.value !== 'api'; hint.hidden = provider.value !== 'browser'; document.querySelector('#n8n-hint').hidden = provider.value !== 'n8n'; document.querySelector('#provider-status').hidden = provider.value !== 'api'; }
+  function update() { document.querySelector('#browser-model-settings').hidden = provider.value === 'api'; api.hidden = provider.value !== 'api'; hint.hidden = provider.value !== 'browser'; document.querySelector('#n8n-hint').hidden = provider.value !== 'n8n'; document.querySelector('#provider-status').hidden = provider.value !== 'api'; }
   document.querySelector('#n8n-settings').addEventListener('submit', async event => {
     event.preventDefault();
     try {
@@ -34,7 +35,13 @@
       if (!Number.isInteger(geminiAccountIndex) || geminiAccountIndex < 0 || geminiAccountIndex > 20 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(geminiAccountEmail)) throw new Error('Enter the account number and email shown in your Pro Gemini tab.');
       await chrome.storage.local.set({ geminiAccountIndex, geminiAccountEmail, translationProvider: 'browser' });
       provider.value = 'browser'; update();
-      document.querySelector('#status').textContent = 'Pro account saved. Gemini browser will use Argon / Medium only. Click Translate in Udemy.';
+      document.querySelector('#status').textContent = 'Pro အကောင့် သိမ်းပြီးပါပြီ။ ရွေးထားသော model ဖြင့် သုံးရန် Udemy မှာ Translate နှိပ်ပါ။';
+    } catch (error) { document.querySelector('#status').textContent = error.message; }
+  });
+  document.querySelector('#browser-model').addEventListener('change', async event => {
+    try {
+      await chrome.storage.local.set({ geminiBrowserModel: event.target.value });
+      document.querySelector('#status').textContent = 'Model သိမ်းပြီးပါပြီ။ Udemy မှာ Translate ပြန်နှိပ်ပါ။';
     } catch (error) { document.querySelector('#status').textContent = error.message; }
   });
   provider.addEventListener('change', async () => {

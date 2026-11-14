@@ -32,7 +32,12 @@
     if (parsed.length !== original.length || parsed.some((cue, i) => Math.abs(cue.start - original[i].start) > 0.0006 || Math.abs(cue.end - original[i].end) > 0.0006)) throw new Error('Gemini changed subtitle timestamps. No translation was applied.');
     return parsed.map(cue => cue.text);
   }
-  const api = { timestamp, toSrt, prompt, parseReply };
+  function model(value) {
+    if (value === undefined) return 'hydrogen-medium';
+    if (!['hydrogen-medium', 'argon-medium', 'flash-lite', 'current'].includes(value)) throw new Error('Unknown Gemini browser model.');
+    return value;
+  }
+  const api = { timestamp, toSrt, prompt, parseReply, model };
   root.BrowserSubtitleCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);
