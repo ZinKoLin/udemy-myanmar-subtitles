@@ -11,7 +11,7 @@ export function createHttp({ jobs, token, run }) {
         const job = [...jobs.items.values()].find(item => item.state === 'ready');
         if (!job) break;
         try { await run(job); } catch { await jobs.fail(job, 'The server browser could not complete this job. Open the login desktop and retry.'); }
-        if (['ready', 'waiting'].includes(job.state)) await jobs.fail(job, 'The server browser stopped without a complete translated SRT.');
+        if (['ready', 'repair-ready', 'waiting'].includes(job.state)) await jobs.fail(job, 'The server browser stopped without a complete translated SRT.');
       }
     } finally { active = false; }
   }

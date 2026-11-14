@@ -27,7 +27,7 @@ async function webHandle(message, sender) {
     const cached = await TranslationCache.get(cacheKey, sender);
     if (cached && browserModel !== 'current') return { done: true, cached: true, texts: SubtitleCore.validateTranslations(cached.map((text, id) => ({ id, text })), cues.length) };
     const old = await webRead();
-    if (old && ['preparing', 'ready', 'waiting'].includes(old.state)) {
+    if (old && ['preparing', 'ready', 'repair-ready', 'waiting'].includes(old.state)) {
       if (webOwner(old, sender) && old.cacheKey === cacheKey && (remote ? old.mode === 'n8n' : old.expectedEmail === geminiAccountEmail.toLowerCase() && old.accountIndex === geminiAccountIndex)) return { id: old.id };
       if (old.mode === 'n8n' && old.ownerTab === sender.tab.id) {
         try { await n8nRequest(old.connection, { action: 'cancel', id: old.id }); } catch { /* Local method switching must still work when the server is offline. Late remote answers are never applied. */ }
@@ -38,7 +38,7 @@ async function webHandle(message, sender) {
       }
     }
     const id = crypto.randomUUID().replace(/-/g, '');
-    const job = { id, ownerTab: sender.tab.id, ownerUrl: sender.url.split('#')[0], cues, srt, cacheKey, expectedEmail: geminiAccountEmail?.toLowerCase(), accountIndex: geminiAccountIndex, mode: remote ? 'n8n' : 'browser', connection: remote, browserModel, state: 'preparing', created: Date.now(), updated: Date.now() };
+    const job = { id, ownerTab: sender.tab.id, ownerUrl: sender.url.split('#')[0], cues, srt, cacheKey, expectedEmail: geminiAccountEmail?.toLowerCase(), accountIndex: geminiAccountIndex, mode: remote ? 'n8n' : 'browser', connection: remote, browserModel, protocol: 2, repairs: 0, state: 'preparing', created: Date.now(), updated: Date.now() };
     await webSave(job);
     try {
       if (remote) {
@@ -88,7 +88,7 @@ async function webHandle(message, sender) {
     }
     return {};
   }
-  if (job && ['preparing', 'ready', 'waiting'].includes(job.state) && Date.now() - job.created > 20 * 60 * 1000) {
+  if (job && ['preparing', 'ready', 'repair-ready', 'waiting'].includes(job.state) && Date.now() - job.created > 20 * 60 * 1000) {
     job.state = 'error'; job.error = 'Gemini translation timed out after 20 minutes. Check its tab and retry.'; job.srt = ''; job.cues = []; await webSave(job);
   }
   if (message.type === 'WEB_STATUS') {
@@ -106,7 +106,7 @@ async function webHandle(message, sender) {
       } else if (['error', 'cancelled'].includes(remote.state)) {
         job.state = remote.state; job.error = remote.error || 'Server translation stopped.'; job.srt = ''; job.cues = []; await webSave(job);
       } else job.status = 'n8n / server Gemini: ' + (remote.status || remote.state || 'waiting');
-    } else if (['preparing', 'ready', 'waiting'].includes(job.state)) {
+    } else if (['preparing', 'ready', 'repair-ready', 'waiting'].includes(job.state)) {
       try { await chrome.tabs.get(job.geminiTab); }
       catch { job.state = 'error'; job.error = 'The Gemini tab was closed. Click Translate to retry.'; }
       if (Date.now() - job.created > 20 * 60 * 1000) { job.state = 'error'; job.error = 'Gemini translation timed out after 20 minutes. Check its tab and retry.'; }
@@ -122,25 +122,31 @@ async function webHandle(message, sender) {
       await chrome.storage.local.set({ geminiBrowserSession: { ...session, chatUrl: url.origin + url.pathname } });
     }
   }
-  if (message.type === 'WEB_TASK') return { id: job.id, state: job.state, expectedEmail: job.expectedEmail, accountIndex: job.accountIndex, browserModel: job.browserModel || 'argon-medium', srt: job.state === 'ready' ? job.srt : undefined, prompt: job.state === 'ready' ? BrowserSubtitleCore.prompt(job.id, job.cues.length) : undefined, error: job.error };
+  if (message.type === 'WEB_TASK') return { id: job.id, state: job.state, expectedEmail: job.expectedEmail, accountIndex: job.accountIndex, browserModel: job.browserModel || 'argon-medium', responseId: BrowserSubtitleCore.responseId(job), repairPrompt: job.state === 'repair-ready' ? BrowserSubtitleCore.repairPrompt(job) : undefined, srt: job.state === 'ready' ? (job.protocol === 2 ? BrowserSubtitleCore.taggedSrt(job.cues) : job.srt) : undefined, prompt: job.state === 'ready' ? BrowserSubtitleCore.prompt(job.id, job.cues.length) : undefined, error: job.error };
   if (message.id !== job.id) throw new Error('Stale Gemini response.');
   if (message.type === 'WEB_SENT' && job.state === 'ready') {
     job.state = 'waiting'; job.srt = ''; job.status = 'The whole SRT is being translated in Gemini. Waiting for the complete reply…'; job.updated = Date.now(); await webSave(job); return { claimed: true };
   }
+  if (message.type === 'WEB_REPAIR_SENT' && job.state === 'repair-ready') { job.state = 'waiting'; job.updated = Date.now(); await webSave(job); return { claimed: true }; }
   if (message.type === 'WEB_RESULT' && job.state === 'waiting') {
     if (typeof message.raw !== 'string' || message.raw.length > 4000000) throw new Error('Invalid Gemini response.');
-    const texts = BrowserSubtitleCore.parseReply(message.raw, job.id, job.cues);
+    let texts;
+    try { texts = BrowserSubtitleCore.parseReply(message.raw, BrowserSubtitleCore.responseId(job), job.cues, job.protocol === 2); }
+    catch (error) {
+      if ((job.repairs || 0) >= 1) throw new Error('Gemini က စာတန်း ID များကို မပြည့်အောင် ပြန်ပေးနေပါသည်။ အလိုအလျောက် တစ်ကြိမ်ပြန်စပြီး မအောင်မြင်ပါ။ Model ပြောင်းပြီး Translate ပြန်နှိပ်ပါ။');
+      job.repairs = 1; job.protocol = 2; job.state = 'repair-ready'; job.status = 'စာတန်း ID မပြည့်သဖြင့် မူရင်းစာသားဖြင့် တစ်ကြိမ်ပြန်ဘာသာပြန်နေပါသည်။'; job.updated = Date.now(); await webSave(job); return { repair: true };
+    }
     await TranslationCache.put(job.cacheKey, texts, { tab: { id: job.ownerTab }, url: job.ownerUrl });
     job.state = 'done'; job.texts = texts; job.srt = ''; job.cues = []; job.updated = Date.now(); await webSave(job); return { done: true };
   }
-  if (message.type === 'WEB_ERROR' && ['ready', 'waiting'].includes(job.state)) {
+  if (message.type === 'WEB_ERROR' && ['ready', 'repair-ready', 'waiting'].includes(job.state)) {
     job.state = 'error'; job.error = typeof message.error === 'string' ? message.error.slice(0, 300) : 'Gemini browser translation failed.';
     job.srt = ''; job.cues = []; job.updated = Date.now(); await webSave(job); return {};
   }
   return { idle: true };
 }
 function browserMessage(message, sender, respond) {
-  if (sender.id !== chrome.runtime.id || !message || !['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
+  if (sender.id !== chrome.runtime.id || !message || !['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_REPAIR_SENT', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
   let url; try { url = new URL(sender.url); } catch { return false; }
   const udemy = url.protocol === 'https:' && (url.hostname === 'udemy.com' || url.hostname.endsWith('.udemy.com'));
   const gemini = url.origin === 'https://gemini.google.com';

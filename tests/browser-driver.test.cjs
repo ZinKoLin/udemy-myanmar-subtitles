@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 async function driver(options = {}) {
-  let tick, wake, now = 0, uploads = 0, clicks = 0, state = 'ready', response = '', result, failure, timerActive = false;
+  let tick, wake, now = 0, uploads = 0, clicks = 0, state = 'ready', response = '', result, failure, timerActive = false, repaired = false;
   const fileList = [];
   const task = { id: 'job', expectedEmail: 'pro@example.com', accountIndex: 2, browserModel: options.model || 'argon-medium', srt: '1\n00:00:00,000 --> 00:00:02,000\nHello\n', prompt: 'Translate the whole file.' };
   const element = label => ({ style: {}, textContent: '', isConnected: false, getAttribute: name => name === 'aria-label' ? label : null, getClientRects: () => [{}], classList: { contains: () => false }, focus() {}, dispatchEvent() {} });
@@ -38,14 +38,16 @@ async function driver(options = {}) {
         if (selector === 'button') return [picker, sendButton];
         if (selector === '[role="menuitemradio"]' && options.model) return [modelChoice];
         if (selector.includes('input[type=')) return [input];
-        if (selector.startsWith('model-response')) return response ? [...(options.oldHistory ? Array.from({length: 100}, () => ({ get innerText() { throw new Error('Old chat text must not be read'); } })) : []), { innerText: response, querySelectorAll: () => options.codeBlock ? [{ textContent: task.srt }] : [] }] : [];
+        if (selector.startsWith('model-response')) return response ? [...(options.oldHistory ? Array.from({length: 100}, () => ({ get innerText() { throw new Error('Old chat text must not be read'); } })) : []), { innerText: response, querySelectorAll: () => options.codeText ? [{textContent:options.codeText}] : options.codeBlock ? [{ textContent: task.srt }] : [] }] : [];
         return [];
       }
     },
     chrome: { runtime: { id: 'test', onMessage: { addListener(fn) { wake = fn; } }, async sendMessage(message) {
       if (message.type === 'WEB_TASK') return { ok: true, ...task, state };
       if (message.type === 'WEB_SENT') { state = 'waiting'; return { ok: true, claimed: !options.alreadyClaimed }; }
-      if (message.type === 'WEB_RESULT') { result = message.raw; state = 'done'; }
+      if (message.type === 'WEB_REPAIR_SENT') { state = 'waiting'; return {ok:true,claimed:true}; }
+      if (message.type === 'WEB_RESULT' && options.repair && !repaired) { repaired = true; state = 'repair-ready'; task.responseId = 'job_repair1'; task.repairPrompt = 'Translate all original fragments with their IDs.'; return {ok:true,repair:true}; }
+      if (message.type === 'WEB_RESULT') { result = message.raw; state = 'done'; return { ok: true, done: true }; }
       if (message.type === 'WEB_ERROR') { failure = message.error; state = 'error'; }
       return { ok: true };
     } } }
@@ -113,4 +115,29 @@ test('completed adapters release their timer, skip old chat text, and wake on th
   assert.equal(app.result, 'BEGIN_job\ncomplete\nEND_job'); assert.equal(app.failure, undefined);
   assert.equal(app.timerActive, false);
   await app.nextJob(); assert.equal(app.timerActive, true); assert.equal(app.uploads, 2);
+});
+
+test('adapter sends one correction without another file and ignores the previous answer markers', async () => {
+ const app = await driver({repair:true});
+ await app.poll('BEGIN_job\ninvalid complete\nEND_job'); await app.poll(); await app.poll();
+ assert.equal(app.result,undefined); assert.equal(app.clicks,1);
+ await app.poll(); assert.equal(app.clicks,2); assert.equal(app.uploads,1);
+ await app.poll('BEGIN_job\ninvalid complete\nEND_job'); await app.poll(); await app.poll();
+ assert.equal(app.result,undefined);
+ await app.poll('BEGIN_job_repair1\ncorrected complete\nEND_job_repair1'); await app.poll(); await app.poll();
+ assert.equal(app.result,'BEGIN_job_repair1\ncorrected complete\nEND_job_repair1'); assert.equal(app.timerActive,false);
+});
+test('rendered JSON code is extracted without its language or copy labels', async () => {
+ const json = '[{"id":"C000001","text":"မြန်မာ"}]';
+ const app = await driver({codeText:json});
+ await app.poll('BEGIN_job\nJSON Copy code\n'+json+'\nEND_job'); await app.poll(); await app.poll();
+ assert.equal(app.result,'BEGIN_job\n'+json+'\nEND_job');
+});
+test('JSON markers inside or outside a code block never introduce Copy labels or duplicated markers', async () => {
+ const json = '[{"id":"C000001","text":"မြန်မာ"}]';
+ for (const codeText of ['BEGIN_job\n'+json+'\nEND_job','BEGIN_job\n'+json,json+'\nEND_job']) {
+   const app = await driver({codeText});
+   await app.poll('BEGIN_job\nJSON Copy code\n'+json+'\nEND_job'); await app.poll(); await app.poll();
+   assert.equal(app.result,'BEGIN_job\n'+json+'\nEND_job');
+ }
 });

@@ -6,6 +6,7 @@ const { join } = require('node:path');
 const id = 'a'.repeat(32);
 const srt = '1\n00:00:00,000 --> 00:00:02,500\nHello မြန်မာ\n';
 const answer = `BEGIN_${id}\n1\n00:00:00,000 --> 00:00:02,500\nမင်္ဂလာပါ\nEND_${id}`;
+const jsonAnswer = (marker = id) => `BEGIN_${marker}\n${JSON.stringify([{id:'C000001',text:'မင်္ဂလာပါ'}])}\nEND_${marker}`;
 const account = { email: 'pro@example.test', index: 0 };
 async function setup(t) {
   const { Jobs } = await import('../server/jobs.mjs');
@@ -25,10 +26,10 @@ test('server stores each full SRT once, rejects mismatched retries and survives 
 test('server rejects missing cues and discards late answers after cancellation', async t => {
   const { jobs } = await setup(t); const job = await jobs.start({ id, srt });
   const task = await jobs.message(job, { type: 'WEB_TASK' }, account);
-  assert.equal(task.expectedEmail, account.email); assert.equal(task.srt.trim(), srt.trim());
+  assert.equal(task.expectedEmail, account.email); assert.equal(task.srt.trim(), srt.replace('Hello မြန်မာ', '[C000001] Hello မြန်မာ').trim());
   await jobs.message(job, { type: 'WEB_SENT', id }, account);
-  await assert.rejects(jobs.message(job, { type: 'WEB_RESULT', id, raw: answer.replace('\n1\n', '\n2\n') }, account), /cue number/);
-  assert.equal(job.state, 'waiting');
+  assert.equal((await jobs.message(job, { type: 'WEB_RESULT', id, raw: answer.replace('\n1\n', '\n2\n') }, account)).repair, true);
+  assert.equal(job.state, 'repair-ready');
   await jobs.cancel(id);
   await jobs.message(job, { type: 'WEB_RESULT', id, raw: answer }, account);
   assert.equal(job.state, 'cancelled'); assert.equal(job.raw, undefined);
@@ -42,7 +43,7 @@ test('authenticated server HTTP accepts one complete job, returns promptly, then
   const server = createHttp({ jobs, token, run: async job => {
     runs++; await jobs.message(job, { type: 'WEB_SENT', id }, account);
     await gate;
-    await jobs.message(job, { type: 'WEB_RESULT', id, raw: answer }, account);
+    await jobs.message(job, { type: 'WEB_RESULT', id, raw: jsonAnswer() }, account);
   } });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { finish(); await new Promise(resolve => server.close(resolve)); });
@@ -64,8 +65,18 @@ test('authenticated server HTTP accepts one complete job, returns promptly, then
 });
 
 test('server returns canonical original timestamps even when Gemini changes them', async t => {
- const {jobs} = await setup(t); const job = await jobs.start({id, srt});
+ const {jobs} = await setup(t); const job = await jobs.start({id, srt}); job.protocol = 1;
  await jobs.message(job, {type:'WEB_SENT',id},account);
  await jobs.message(job, {type:'WEB_RESULT',id,raw:answer.replace('02,500','03,000')},account);
  assert.equal(job.state,'done'); assert.equal(job.raw, answer);
+});
+test('server correction uses a new marker and returns only a complete canonical SRT', async t => {
+  const {jobs} = await setup(t), job = await jobs.start({id,srt});
+  await jobs.message(job,{type:'WEB_SENT',id},account);
+  assert.equal((await jobs.message(job,{type:'WEB_RESULT',id,raw:`BEGIN_${id}\n[]\nEND_${id}`},account)).repair,true);
+  const task = await jobs.message(job,{type:'WEB_TASK'},account);
+  assert.equal(task.responseId,id+'_repair1'); assert.equal(jobs.public(job).raw,undefined);
+  await jobs.message(job,{type:'WEB_REPAIR_SENT',id},account);
+  assert.equal((await jobs.message(job,{type:'WEB_RESULT',id,raw:jsonAnswer(task.responseId)},account)).done,true);
+  assert.equal(job.raw,answer);
 });

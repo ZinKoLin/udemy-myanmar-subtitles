@@ -101,6 +101,22 @@
     medium.click();
     await waitFor(selected);
   }
+  async function repair(task) {
+    const box = await waitFor(editor);
+    if (box.textContent.trim() || generating()) throw new Error('Gemini chat ထဲတွင် draft သို့မဟုတ် အဖြေတစ်ခု ရှိနေပါသည်။ အရင်ရှင်းပြီး Udemy မှ ပြန်စပါ။');
+    const claim = await send({ type: 'WEB_REPAIR_SENT', id: task.id });
+    if (!claim.claimed) return;
+    box.focus();
+    if (!document.execCommand('insertText', false, task.repairPrompt)) {
+      box.textContent = task.repairPrompt;
+      box.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: task.repairPrompt }));
+    }
+    const button = await waitFor(() => { const b = submit(); return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' && b; });
+    const current = await send({ type: 'WEB_TASK' });
+    if (current.id !== task.id || current.state !== 'waiting') return;
+    button.click(); lastRaw = ''; stableSince = 0;
+    display('စာကြောင်းအရေအတွက် မကိုက်သဖြင့် မူရင်း ID များဖြင့် ပြန်ဘာသာပြန်နေပါသည်။\nအကုန်ပြည့်မှ Udemy တွင် စာတန်းပြပါမည်။');
+  }
   function responseText(id) {
     // Only model responses; never accept the prompt, sidebar, or unrelated chat text.
     const nodes = Array.from(document.querySelectorAll('model-response .markdown, model-response message-content, .model-response-text'));
@@ -110,9 +126,13 @@
       if (!text.includes(`BEGIN_${id}`) || !text.includes(`END_${id}`)) continue;
       // Rendered code blocks include language labels and Copy buttons. Read only the code, keeping job markers.
       const code = Array.from(node.querySelectorAll('pre code'));
-      if (code.length === 1 && /\d{2}:\d{2}:\d{2}[,.]\d{3}\s+-->/.test(code[0].textContent)) {
-        const srt = code[0].textContent;
-        return srt.includes(`BEGIN_${id}`) && srt.includes(`END_${id}`) ? srt : `BEGIN_${id}\n${srt}\nEND_${id}`;
+      if (code.length === 1) {
+        const content = code[0].textContent;
+        const begin = `BEGIN_${id}`, end = `END_${id}`;
+        if (content.includes(begin) || /^\s*\[/.test(content) || /\d{2}:\d{2}:\d{2}[,.]\d{3}\s+-->/.test(content)) {
+          // Gemini may put either marker inside the code block or outside it.
+          return (content.includes(begin) ? '' : begin + '\n') + content + (content.includes(end) ? '' : '\n' + end);
+        }
       }
       return text;
     }
@@ -131,12 +151,15 @@
         return;
       }
       if (task.state === 'ready') await upload(task);
+      if (task.state === 'repair-ready') await repair(task);
       if (task.state === 'waiting') {
-        const raw = responseText(task.id);
+        const raw = responseText(task.responseId || task.id);
         if (!raw || generating()) { lastRaw = ''; stableSince = 0; return; }
         if (raw !== lastRaw) { lastRaw = raw; stableSince = Date.now(); return; }
         if (Date.now() - stableSince >= 3000) {
-          await send({ type: 'WEB_RESULT', id: task.id, raw });
+          const result = await send({ type: 'WEB_RESULT', id: task.id, raw });
+          if (result.repair) { lastRaw = ''; stableSince = 0; display('စာကြောင်းမပြည့်သဖြင့် အလိုအလျောက် ပြန်တောင်းနေပါသည်။'); return; }
+          if (!result.done) { lastRaw = ''; stableSince = 0; return; }
           display('ဘာသာပြန်ပြီးပါပြီ။ Udemy မှာ စာတန်းထိုး အသင့်ဖြစ်ပါပြီ။'); stopped = true;
         }
       }

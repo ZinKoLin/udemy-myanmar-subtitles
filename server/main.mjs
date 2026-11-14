@@ -30,7 +30,7 @@ async function run(job) {
     await page.addInitScript({ content: adapter });
     await page.goto(accountUrl + '#udemy-srt=' + job.id, { waitUntil: 'domcontentloaded', timeout: 60000 });
     const deadline = Date.now() + 20 * 60 * 1000;
-    while (['ready', 'waiting'].includes(job.state) && !page.isClosed()) {
+    while (['ready', 'repair-ready', 'waiting'].includes(job.state) && !page.isClosed()) {
       if (Date.now() > deadline) { await jobs.fail(job, 'Server Gemini timed out after 20 minutes. Check login or account limits, then retry.'); break; }
       await new Promise(resolve => setTimeout(resolve, 1000));
     }

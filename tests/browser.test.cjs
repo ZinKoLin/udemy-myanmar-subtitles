@@ -7,6 +7,7 @@ globalThis.SubtitleCore = core;
 const browser = require('../browser-core.js');
 const cues = [{ start: 0.125, end: 2, text: 'Hello' }, { start: 3, end: 5.75, text: 'Keep the code: npm test' }];
 const reply = (id, text = 'မင်္ဂလာပါ') => `BEGIN_${id}\n\`\`\`srt\n1\n00:00:00,125 --> 00:00:02,000\n${text}\n\n2\n00:00:03,000 --> 00:00:05,750\nnpm test ကို သုံးပါ\n\`\`\`\nEND_${id}`;
+const jsonReply = (id) => `BEGIN_${id}\n${JSON.stringify([{id:'C000001',text:'မင်္ဂလာပါ'},{id:'C000002',text:'npm test ကို သုံးပါ'}])}\nEND_${id}`;
 test('complete SRT roundtrip preserves millisecond timing, gaps and all cues', () => {
   assert.deepEqual(core.parseSubtitles(browser.toSrt(cues)), cues);
   assert.equal(browser.timestamp(36000.001), '10:00:00,001');
@@ -54,8 +55,11 @@ test('whole lecture goes as one SRT job, survives worker restart, validates and 
   task = await restarted.send({ type: 'WEB_TASK' }, restarted.gemini);
   assert.equal(task.state, 'waiting'); assert.equal(task.srt, undefined);
   const invalid = await restarted.send({ type: 'WEB_RESULT', id: started.id, raw: reply(started.id).replace('\n2\n', '\n1\n') }, restarted.gemini);
-  assert.equal(invalid.ok, false); assert.equal(restarted.saved.browserSubtitleJob.state, 'waiting');
-  assert.equal((await restarted.send({ type: 'WEB_RESULT', id: started.id, raw: reply(started.id) }, restarted.gemini)).done, true);
+  assert.equal(invalid.repair, true); assert.equal(restarted.saved.browserSubtitleJob.state, 'repair-ready');
+  const repairTask = await restarted.send({type:'WEB_TASK'}, restarted.gemini);
+  assert.match(repairTask.repairPrompt, /SOURCE_FRAGMENTS/);
+  assert.equal((await restarted.send({type:'WEB_REPAIR_SENT',id:started.id},restarted.gemini)).claimed,true);
+  assert.equal((await restarted.send({ type: 'WEB_RESULT', id: started.id, raw: jsonReply(repairTask.responseId) }, restarted.gemini)).done, true);
   const status = await restarted.send({ type: 'WEB_STATUS', id: started.id });
   assert.equal(status.state, 'done'); assert.equal(status.texts.length, 2);
   assert.equal((await restarted.send({ type: 'WEB_START', cues })).cached, true);
@@ -101,7 +105,7 @@ test('later lectures reuse the same dedicated Gemini conversation, including reo
   const first = await app.send({ type: 'WEB_START', cues });
   await app.send({ type: 'WEB_TASK' }, app.gemini);
   await app.send({ type: 'WEB_SENT', id: first.id }, app.gemini);
-  await app.send({ type: 'WEB_RESULT', id: first.id, raw: reply(first.id) }, app.gemini);
+  await app.send({ type: 'WEB_RESULT', id: first.id, raw: jsonReply(first.id) }, app.gemini);
   assert.equal(app.saved.geminiBrowserSession.chatUrl, app.gemini.url);
   const second = await app.send({ type: 'WEB_START', cues: cues.map(cue => ({ ...cue, text: cue.text + ' next' })) });
   assert.equal(second.ok, true); assert.equal(app.created, 1);
@@ -141,12 +145,12 @@ test('Hydrogen Medium defaults, model changes isolate cache and late replies can
   const first = await app.send({ type: 'WEB_START', cues });
   assert.equal((await app.send({ type: 'WEB_TASK' }, app.gemini)).browserModel, 'hydrogen-medium');
   await app.send({ type: 'WEB_SENT', id: first.id }, app.gemini);
-  await app.send({ type: 'WEB_RESULT', id: first.id, raw: reply(first.id) }, app.gemini);
+  await app.send({ type: 'WEB_RESULT', id: first.id, raw: jsonReply(first.id) }, app.gemini);
   assert.equal((await app.send({ type: 'SET_BROWSER_MODEL', model: 'flash-lite' })).browserModel, 'flash-lite');
   const next = await app.send({ type: 'WEB_START', cues });
   assert.equal(next.cached, undefined); assert.notEqual(next.id, first.id);
   assert.equal((await app.send({ type: 'WEB_TASK' }, app.gemini)).browserModel, 'flash-lite');
-  assert.equal((await app.send({ type: 'WEB_RESULT', id: first.id, raw: reply(first.id) }, app.gemini)).ok, false);
+  assert.equal((await app.send({ type: 'WEB_RESULT', id: first.id, raw: jsonReply(first.id) }, app.gemini)).ok, false);
   assert.equal((await app.send({ type: 'SET_BROWSER_MODEL', model: 'bad' })).ok, false);
   assert.equal(await app.send({ type: 'SET_BROWSER_MODEL', model: 'current' }, app.gemini), false);
 });
@@ -155,7 +159,7 @@ test('manual Gemini model mode never reuses translations from a previous manuall
   await app.send({ type: 'SET_BROWSER_MODEL', model: 'current' });
   const first = await app.send({ type: 'WEB_START', cues });
   await app.send({ type: 'WEB_SENT', id: first.id }, app.gemini);
-  await app.send({ type: 'WEB_RESULT', id: first.id, raw: reply(first.id) }, app.gemini);
+  await app.send({ type: 'WEB_RESULT', id: first.id, raw: jsonReply(first.id) }, app.gemini);
   const next = await app.send({ type: 'WEB_START', cues });
   assert.notEqual(next.id, first.id); assert.equal(next.cached, undefined);
 });
@@ -167,4 +171,30 @@ test('model timestamp drift and reversed times cannot change original millisecon
   assert.deepEqual(translated.map(c => c.text), ['မင်္ဂလာပါ', 'npm test ကို သုံးပါ']);
   assert.deepEqual(core.parseSubtitles(browser.toSrt(translated)), translated);
   assert.equal(cues[0].text, 'Hello');
+});
+test('immutable JSON IDs allow reordering, preserve original timing and reject missing or duplicate IDs', () => {
+  const marker = 'job';
+  const wrap = items => `BEGIN_${marker}\n\`\`\`json\n${JSON.stringify(items)}\n\`\`\`\nEND_${marker}`;
+  const items = [{id:'C000002',text:'ဒုတိယ'},{id:'C000001',text:'ပထမ'}];
+  const translated = browser.translatedCues(wrap(items),marker,cues,true);
+  assert.deepEqual(translated, [{...cues[0],text:'ပထမ'},{...cues[1],text:'ဒုတိယ'}]);
+  for (const invalid of [items.slice(1), [items[0],items[0]], [items[0],{id:'C000003',text:'wrong'}]]) assert.throws(()=>browser.parseReply(wrap(invalid),marker,cues,true));
+  assert.throws(()=>browser.parseReply(reply(marker),marker,cues,true),/immutable/);
+  assert.match(browser.taggedSrt(cues),/\[C000001\] Hello/);
+});
+test('automatic correction has distinct markers, one claim, survives worker restart and stops after one attempt', async () => {
+  const app = setup(); const started = await app.send({type:'WEB_START',cues});
+  await app.send({type:'WEB_SENT',id:started.id},app.gemini);
+  const bad = `BEGIN_${started.id}\n[]\nEND_${started.id}`;
+  assert.equal((await app.send({type:'WEB_RESULT',id:started.id,raw:bad},app.gemini)).repair,true);
+  assert.equal(Object.keys(app.saved).filter(k=>k.startsWith('translation:')).length,0);
+  const resumed = setup(app.saved); const task = await resumed.send({type:'WEB_TASK'},resumed.gemini);
+  assert.equal(task.state,'repair-ready'); assert.notEqual(task.responseId,task.id);
+  assert.match(task.repairPrompt,/C000002/); assert.match(task.repairPrompt,/Keep the code/);
+  assert.equal((await resumed.send({type:'WEB_REPAIR_SENT',id:task.id},resumed.gemini)).claimed,true);
+  assert.notEqual((await resumed.send({type:'WEB_REPAIR_SENT',id:task.id},resumed.gemini)).claimed,true);
+  const failed = await resumed.send({type:'WEB_RESULT',id:task.id,raw:`BEGIN_${task.responseId}\n[]\nEND_${task.responseId}`},resumed.gemini);
+  assert.equal(failed.ok,false); assert.match(failed.error,/တစ်ကြိမ်/);
+  await resumed.send({type:'WEB_ERROR',id:task.id,error:failed.error},resumed.gemini);
+  assert.equal(resumed.saved.browserSubtitleJob.state,'error'); assert.equal(resumed.saved.browserSubtitleJob.repairs,1);
 });

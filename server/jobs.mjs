@@ -39,7 +39,7 @@ export class Jobs {
     const old = this.items.get(input.id);
     if (old) { if (old.hash !== hash) throw new Error('This job ID is already associated with another SRT.'); return old; }
     if ([...this.items.values()].filter(job => !terminal(job)).length >= 20) throw new Error('The browser queue is full. Try later.');
-    const job = { id: input.id, hash, srt, cues, browserModel, state: 'ready', created: Date.now(), status: 'Queued for server Gemini / selected model.' };
+    const job = { id: input.id, hash, srt, cues, browserModel, protocol: 2, repairs: 0, state: 'ready', created: Date.now(), status: 'Queued for server Gemini / selected model.' };
     this.items.set(job.id, job); await this.save(); return job;
   }
   prune() { for (const [id, job] of this.items) if (terminal(job) && Date.now() - job.created > 86400000) this.items.delete(id); }
@@ -51,14 +51,21 @@ export class Jobs {
   get(id) { this.prune(); const job = this.items.get(id); if (!job) throw new Error('Subtitle job not found or expired.'); return job; }
   public(job) { return { ok: true, id: job.id, state: job.state, status: job.status, error: job.error, ...(job.state === 'done' ? { raw: job.raw } : {}) }; }
   async message(job, input, account) {
-    if (input.type === 'WEB_TASK') return { ok: true, id: job.id, state: job.state, expectedEmail: account.email, accountIndex: account.index, browserModel: job.browserModel || 'argon-medium', srt: job.state === 'ready' ? job.srt : undefined, prompt: job.state === 'ready' ? subtitle.prompt(job.id, job.cues.length) : undefined, error: job.error };
+    if (input.type === 'WEB_TASK') return { ok: true, id: job.id, state: job.state, expectedEmail: account.email, accountIndex: account.index, browserModel: job.browserModel || 'argon-medium', responseId: subtitle.responseId(job), repairPrompt: job.state === 'repair-ready' ? subtitle.repairPrompt(job) : undefined, srt: job.state === 'ready' ? (job.protocol === 2 ? subtitle.taggedSrt(job.cues) : job.srt) : undefined, prompt: job.state === 'ready' ? subtitle.prompt(job.id, job.cues.length) : undefined, error: job.error };
     if (input.id !== job.id) return { ok: false, error: 'Stale subtitle response.' };
     if (input.type === 'WEB_SENT' && job.state === 'ready') { job.state = 'waiting'; job.status = 'The full SRT is being translated in server Gemini / selected model.'; await this.save(); return { ok: true, claimed: true }; }
+    if (input.type === 'WEB_REPAIR_SENT' && job.state === 'repair-ready') { job.state = 'waiting'; await this.save(); return { ok: true, claimed: true }; }
     if (input.type === 'WEB_RESULT' && job.state === 'waiting') {
       if (typeof input.raw !== 'string' || input.raw.length > 4000000) throw new Error('Invalid Gemini response.');
-      const translated = subtitle.translatedCues(input.raw, job.id, job.cues);
+      let translated;
+      try { translated = subtitle.translatedCues(input.raw, subtitle.responseId(job), job.cues, job.protocol === 2); }
+      catch (error) {
+        if ((job.repairs || 0) >= 1) throw new Error('Gemini က စာတန်း ID မပြည့်အောင် ပြန်ပေးနေပါသည်။ Model ပြောင်းပြီး ပြန်စပါ။');
+        job.repairs = 1; job.protocol = 2; job.state = 'repair-ready'; job.status = 'မူရင်း cue ID များဖြင့် တစ်ကြိမ်ပြန်တောင်းနေပါသည်။'; await this.save(); return { ok: true, repair: true };
+      }
       job.raw = `BEGIN_${job.id}\n${subtitle.toSrt(translated)}END_${job.id}`;
       job.state = 'done'; job.status = 'Complete translated SRT validated with original timestamps.'; job.srt = ''; job.cues = []; await this.save();
+      return { ok: true, done: true };
     }
     if (input.type === 'WEB_ERROR' && !terminal(job)) await this.fail(job, input.error);
     return { ok: true };

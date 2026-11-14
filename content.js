@@ -17,27 +17,37 @@
   }
   const launcher = element('button', '⚙ Subtitles', shadow); launcher.id = 'launcher';
   launcher.setAttribute('aria-controls', 'subtitle-settings');
+  let readyNoticeTimer = null;
   const readyNotice = element('button', '', shadow); readyNotice.hidden = true; readyNotice.id = 'translation-notice';
   readyNotice.setAttribute('role', 'status'); readyNotice.setAttribute('aria-live', 'polite');
   readyNotice.style.cssText = 'display:block;margin:0 0 8px auto;max-width:290px;background:#a5f3d1;color:#102b25;font:13px/1.7 "Myanmar Text",sans-serif;padding:8px 12px;border:0;border-radius:8px;cursor:pointer';
   readyNotice.addEventListener('click', () => setPanelOpen(true));
-  function clearReady() { launcher.textContent = '⚙ Subtitles'; readyNotice.hidden = true; delete readyNotice.dataset.state; }
+  function resetReadyTimer() { if (readyNoticeTimer !== null) clearTimeout(readyNoticeTimer); readyNoticeTimer = null; }
+  function clearReady() { resetReadyTimer(); launcher.textContent = '⚙ Subtitles'; readyNotice.hidden = true; delete readyNotice.dataset.state; }
   function announcePending() {
+    resetReadyTimer();
     launcher.textContent = '⏳ ဘာသာပြန်နေပါသည်';
     readyNotice.dataset.state = 'translating'; readyNotice.style.background = '#ffe08a';
     readyNotice.textContent = '⏳ ဘာသာပြန်နေပါသည်။ စာတန်းမရသေးပါ။\nအသင့်ဖြစ်မှ Play နှိပ်ကြည့်ပါ။';
     readyNotice.hidden = false;
   }
   function announceError() {
+    resetReadyTimer();
     launcher.textContent = '⚠ စာတန်း မရသေးပါ';
     readyNotice.dataset.state = 'error'; readyNotice.style.background = '#ffc3b8';
     readyNotice.textContent = '⚠ ဘာသာပြန်မပြီးသေးပါ။ စာတန်း မရသေးပါ။\nအသေးစိတ်ကြည့်ရန် နှိပ်ပါ။'; readyNotice.hidden = false;
   }
   function announceReady(count, cached = false) {
+    resetReadyTimer();
     launcher.textContent = '✓ Subtitles ready';
     readyNotice.dataset.state = 'ready'; readyNotice.style.background = '#a5f3d1';
     readyNotice.textContent = `✓ စာတန်းထိုး အသင့်ဖြစ်ပြီ — ${count} / ${count}${cached ? ' (သိမ်းထားပြီးသား)' : ''}`;
     readyNotice.hidden = false;
+    const displayedGeneration = generation;
+    readyNoticeTimer = setTimeout(() => {
+      if (generation !== displayedGeneration || readyNotice.dataset.state !== 'ready') return;
+      readyNotice.hidden = true; launcher.textContent = '⚙ Subtitles'; readyNoticeTimer = null;
+    }, 6000);
   }
   const panel = element('section', '', shadow); panel.id = 'subtitle-settings';
   panel.setAttribute('aria-label', 'Subtitle settings');

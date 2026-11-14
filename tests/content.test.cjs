@@ -30,7 +30,7 @@ async function page() {
   };
   vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'), 'utf8'), {
     SubtitleCore: core, document, window: { addEventListener() {} }, location: { pathname: '/course/test/learn/lecture/1' }, Date, innerHeight: 800, queueMicrotask,
-    setInterval(fn) { interval = fn; }, setTimeout(fn) { timers.push(fn); },
+    setInterval(fn) { interval = fn; }, setTimeout(fn, delay) { fn.delay = delay; timers.push(fn); return fn; }, clearTimeout(fn) { const i = timers.indexOf(fn); if (i >= 0) timers.splice(i, 1); },
     chrome: { runtime: { onMessage: { addListener() {} }, async sendMessage(message) {
       if (message.type === 'GET_PREFERENCES') return { ok: true, preferences: { autoTranslate: false } };
       if (message.type === 'GET_PROVIDER') return { ok: true, provider: 'browser', browserModel: 'flash-lite' };
@@ -73,4 +73,13 @@ test('paused lectures retain captions without rewriting identical DOM text on ev
   for (let i = 0; i < 20; i++) app.interval();
   assert.equal(app.captionWrites, writes); assert.equal(app.nodes.find(n => n.className === 'burmese').textContent, 'ပထမ');
   app.documentEvents.scroll(); app.interval(); assert.equal(app.captionWrites, writes);
+});
+test('ready notice disappears after six seconds without clearing subtitles; pending warnings remain visible', async () => {
+  const app = await page(); app.find('Translate').handlers.click(); await flush();
+  app.setState('done'); await app.poll();
+  const dismiss = app.timers.find(timer => timer.delay === 6000); assert.ok(dismiss);
+  dismiss(); assert.equal(app.notice.hidden, true); assert.equal(app.nodes.find(n => n.id === 'launcher').textContent, '⚙ Subtitles');
+  app.video.currentTime = 1; app.interval(); assert.equal(app.nodes.find(n => n.className === 'burmese').textContent, 'ပထမ');
+  app.setState('waiting'); app.find('Translate').handlers.click(); await flush();
+  dismiss(); assert.equal(app.notice.hidden, false); assert.equal(app.notice.dataset.state, 'translating');
 });
