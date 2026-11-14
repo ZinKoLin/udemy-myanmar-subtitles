@@ -19,6 +19,14 @@ class Element {
   remove() { this.parent.children.splice(this.parent.children.indexOf(this), 1); }
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test('popup HTML patterns compile under Chrome Unicode-sets validation', () => {
+  const html = fs.readFileSync(require.resolve('../popup.html'), 'utf8');
+  for (const [, pattern] of html.matchAll(/pattern="([^"]+)"/g)) {
+    const expression = new RegExp(`^(?:${pattern})$`, 'v');
+    assert.equal(expression.test('gemini-3.5-flash-lite'), true);
+    assert.equal(expression.test('bad/model'), false);
+  }
+});
 async function popup(saved, listModels = async () => ({ ok: true, models: [] })) {
   const ids = ['status', 'keys', 'model', 'custom-model', 'add-key', 'model-fallback', 'fallback-1', 'fallback-2', 'provider-status', 'rotate', 'custom-label', 'settings', 'refresh-models', 'open', 'clear'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element(['model', 'fallback-1', 'fallback-2'].includes(id) ? 'select' : 'div')]));
@@ -67,4 +75,13 @@ test('fallback order and rapid model changes persist without overwriting API key
   app.nodes.model.value = 'gemini-3.5-flash-lite'; app.nodes.model.handlers.change({});
   await flush();
   assert.equal(saved.model, 'gemini-3.5-flash-lite'); assert.equal(saved.apiKey, 'legacy-secret');
+});
+test('invalid custom model IDs cannot overwrite a working model or saved keys', async () => {
+  const saved = { apiKeys: ['saved-secret'], model: 'gemini-3.5-flash-lite' };
+  const app = await popup(saved);
+  await app.change('model', 'custom');
+  await app.change('custom-model', 'bad/model');
+  assert.equal(saved.model, 'gemini-3.5-flash-lite');
+  assert.deepEqual(saved.apiKeys, ['saved-secret']);
+  assert.match(app.nodes.status.textContent, /valid model IDs/);
 });
