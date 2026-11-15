@@ -12,6 +12,18 @@
   const previewObserver = new PerformanceObserver(list => previewSource.observe(list.getEntries()));
   previewObserver.observe({ type: 'resource', buffered: true });
   function previewPlayer() { return video?.closest('[role="dialog"]')?.querySelector('[data-purpose="media-player-container"]') || null; }
+  let previewSelection = 0;
+  function mediaIdentity(candidate) {
+    const dialog = candidate?.closest('[role="dialog"]') || (!candidate ? document.querySelector('[role="dialog"] [data-purpose="media-player-container"]')?.closest('[role="dialog"]') : null);
+    const player = dialog?.querySelector('[data-purpose="media-player-container"]');
+    if (!player) return candidate?.currentSrc || '';
+    const row = dialog.querySelector('button[class*="__current-preview-row"],button[aria-current="true"],button[aria-pressed="true"]');
+    const label = player.getAttribute?.('aria-label') || '';
+    const selected = row?.textContent?.replace(/\s+/g, ' ').trim() || '';
+    // A blob URL identifies a player transport, not a lesson. Udemy can replace
+    // that URL or the video element while this exact preview remains selected.
+    return label || selected ? 'preview:' + JSON.stringify([label, selected, previewSelection]) : candidate?.currentSrc || '';
+  }
   const host = document.createElement('div');
   host.style.cssText = 'position:fixed;right:18px;top:80px;z-index:2147483646;';
   const shadow = host.attachShadow({ mode: 'open' });
@@ -242,6 +254,7 @@
     // Preview item selection and closing the modal invalidate the old job before
     // its video element/source changes (the course URL stays the same).
     previewSource.begin(performance.now(), video?.currentSrc || '');
+    previewSelection++;
     reset(); overlay.style.display = 'none';
   }, true);
   async function previewSubtitles() {
@@ -544,8 +557,11 @@
       if (bounds !== lastVideoBounds) renderDirty = true;
       lastVideoBounds = bounds;
     }
-    const nextSource = next?.currentSrc || '';
-    if (location.pathname !== sourceUrl || next !== video || nextSource !== mediaSource) {
+    const nextSource = mediaIdentity(next);
+    const samePreview = nextSource.startsWith('preview:') && nextSource === mediaSource && location.pathname === sourceUrl;
+    if (samePreview && next !== video) {
+      restoreTrack(); video = next; renderDirty = true; lastRendered = '';
+    } else if (location.pathname !== sourceUrl || next !== video || nextSource !== mediaSource) {
       reset(); sourceUrl = location.pathname; video = next; mediaSource = nextSource;
     }
     automaticTranslation();

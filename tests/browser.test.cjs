@@ -352,3 +352,24 @@ test('explicit missing-chat page navigates to a fresh composer once and repeated
  assert.equal((await app.send({...message,reason:'not-found'},app.gemini)).ok,false);
  assert.equal(app.saved.browserSubtitleJob.chatRecoveries,1);
 });
+
+
+test('an exact owned draft remains recognizable after its dedicated chat tab is reopened', async () => {
+ const app=setup();const first=await app.send({type:'WEB_START',cues});await app.send({type:'WEB_SENT',id:first.id},app.gemini);
+ const owned=app.saved.geminiOwnedDrafts[0];await app.send({type:'WEB_CANCEL',id:first.id});
+ app.context.chrome.tabs.get=async()=>{throw new Error('closed');};app.context.chrome.tabs.create=async()=>({id:100});
+ await app.send({type:'WEB_START',cues:cues.map(c=>({...c,text:c.text+' next'}))});
+ app.context.chrome.tabs.get=async id=>({id,url:'https://gemini.google.com/u/2/app'});
+ const task=await app.send({type:'WEB_TASK'},{...app.gemini,tab:{id:100}});
+ assert.ok(task.ownedDrafts.some(x=>x.hash===owned.hash&&x.responseId===first.id));
+});
+
+test('waiting for a previous Gemini response keeps the same ready job and reports its status to the lesson', async () => {
+ const app=setup();const {id}=await app.send({type:'WEB_START',cues});
+ assert.equal((await app.send({type:'WEB_BUSY',id},app.gemini)).ok,true);
+ assert.equal((await app.send({type:'WEB_STATUS',id})).state,'ready');
+ assert.match((await app.send({type:'WEB_STATUS',id})).status,/အရင်အဖြေ/);
+ assert.equal((await app.send({type:'WEB_START',cues})).id,id);assert.equal(app.created,1);
+ assert.equal(await app.send({type:'WEB_BUSY',id},app.udemy),false);
+ assert.notEqual((await app.send({type:'WEB_BUSY',id:'other'},app.gemini)).ok,true);
+});

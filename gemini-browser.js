@@ -2,6 +2,7 @@
   // The worker binds one dedicated Gemini tab to one Udemy job. Other Gemini chats stay untouched.
   let busy = false, stopped = false, lastRaw = '', stableSince = 0, idleCount = 0, wakePending = false, pollTimer;
   let missingKey = '', missingSince = 0;
+  let busyStatusKey = '';
   let lastErrorText = '', errorSince = 0, localRetry = { id: '', count: 0, at: 0 };
   const clientId = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
   function startPolling() { if (!pollTimer) pollTimer = setInterval(tick, 1500); }
@@ -154,13 +155,22 @@
     if (!box) { display('Gemini မှာ login ဝင်ပါ။ စာရေးကွက်ပေါ်လာလျှင် ဆက်လုပ်ပါမည်။'); return; }
     await verifyAccount(task);
     if (await recoverMissingChat(task)) return;
+    if (generating()) {
+      display('Gemini ၏ အရင်အဖြေ ပြီးသည်အထိ စောင့်နေပါသည်။ SRT အသစ်ကို ထပ်မပို့သေးပါ။');
+      const key = task.id + '/' + (task.responseId || task.id);
+      if (task.recovery && busyStatusKey !== key) {
+        await send({ type: 'WEB_BUSY', id: task.id }); busyStatusKey = key;
+      }
+      return;
+    }
     if (!generating()) await clearOwnedDraft(task);
     // Gemini briefly restores its editor while loading a saved chat. Never erase a draft or mistake hydration for a user draft.
     const editorDeadline = Date.now() + 15000;
-    while ((!box || draftText(box).trim() || generating()) && Date.now() < editorDeadline) {
+    while ((!box || draftText(box).trim()) && Date.now() < editorDeadline) {
       await new Promise(resolve => setTimeout(resolve, 400)); box = editor();
     }
-    if (!box || draftText(box).trim() || generating()) {
+    if (generating()) return;
+    if (!box || draftText(box).trim()) {
       const current = await send({ type: 'WEB_TASK' });
       if (current.id !== task.id || current.state !== 'ready') return;
       throw new Error('The dedicated Gemini tab already contains a draft or active response. Finish or clear it, then retry from Udemy.');
@@ -205,6 +215,7 @@
   }
   async function repair(task) {
     const box = await waitFor(editor);
+    if (generating()) { display('Gemini အဖြေ ထုတ်နေဆဲဖြစ်သဖြင့် ပြီးသည်အထိ စောင့်နေပါသည်။'); return; }
     if (!generating()) await clearOwnedDraft(task);
     if (draftText(box).trim() || generating()) throw new Error('Gemini chat ထဲတွင် draft သို့မဟုတ် အဖြေတစ်ခု ရှိနေပါသည်။ အရင်ရှင်းပြီး Udemy မှ ပြန်စပါ။');
     const claim = await send({ type: 'WEB_REPAIR_SENT', id: task.id, clientId });

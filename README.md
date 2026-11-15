@@ -12,6 +12,14 @@
 
 အရင်ကြည့်ရန် `powershell -File .\scripts\cleanup-duplicate-srt.ps1 -WhatIf` ကို သုံးနိုင်ပါသည်။ နေ့စဉ်လည်ပတ်ရန် Windows Task Scheduler တွင် သီးခြားသတ်မှတ်ရပြီး Codex ဖွင့်ထားရန် မလိုပါ။ Extension ZIP တွင် cleanup script မပါဝင်ပါ။ Mac အတွက် cleanup installer မထည့်ရသေးပါ။
 
+## Version 0.9.5 — Preview ဘာသာပြန်မှု ထပ်မစေရန်
+
+Udemy Preview တစ်ခုတည်း၏ `blob:` URL သို့မဟုတ် video element ပြောင်းသော်လည်း ရွေးထားသော Preview နှင့် player အမည်ကိုက်ညီလျှင် လက်ရှိ job နှင့် စာတန်းကို ဆက်ထိန်းပါသည်။ Preview တကယ်ပြောင်းမှ job ဟောင်းကို ရပ်ပါသည်။ Gemini မှာ အရင်အဖြေ ထုတ်နေဆဲဖြစ်လျှင် ၁၅ စက္ကန့်ပြည့်ရုံဖြင့် error မပေးဘဲ စောင့်ပြီး၊ အဖြေပြီးမှ နောက် SRT ကို တစ်ကြိမ်ပို့ပါသည်။ Udemy မှာလည်း အရင်အဖြေကို စောင့်နေကြောင်း ပြပါသည်။
+
+Chat tab ပြန်ဖွင့်ပြီး ကျန်ခဲ့သည့် extension draft ကို tab ID ဟောင်းအစား prompt hash ဖြင့် အတည်ပြုရှင်းနိုင်ပါသည်။ သိမ်းထားသော hash မှတ်တမ်း အများဆုံး 16 ခုသာ ချန်ထားပြီး ကိုယ်တိုင်ရေးထားသော draft ကို ဆက်ကာကွယ်ပါသည်။
+
+Automated tests 115 ခု အောင်မြင်ပါသည်။ Preview URL ငါးကြိမ်ပြောင်းခြင်း၊ video element ခဏပျောက်ခြင်း / အစားထိုးခြင်းနှင့် Gemini busy ဖြစ်နေခြင်းတို့တွင် မူရင်းအချိန်မပြောင်းဘဲ job / upload / Send တစ်ကြိမ်သာဖြစ်ကြောင်း regression tests ဖြင့် စစ်ထားပါသည်။ Extension ကို Reload လုပ်ပြီး Udemy နှင့် Gemini စာမျက်နှာတို့ကိုပါ Reload လုပ်ပါ။
+
 ## Version 0.9.4 — ဖျက်မိသော Gemini chat recovery
 
 သိမ်းထားသော chat ကို ဖွင့်ရာတွင် Gemini က chat အလွတ်စာမျက်နှာသို့ ပြန်ပို့ပြီး မှန်ကန်သော Pro account ဖြင့် page အသင့်ဖြစ်ကြောင်း တည်ငြိမ်စွာ စစ်ဆေးရလျှင် မူလ chat မရတော့ဟု သတ်မှတ်ပြီး chat အသစ်တစ်ခုဖြင့် အလိုအလျောက် ပြန်စပါသည်။ Loading၊ login၊ အခြား account၊ ကိုယ်တိုင်ရေးထားသော draft နှင့် manual New chat တို့ကို recovery အဖြစ် မယူပါ။

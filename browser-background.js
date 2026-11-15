@@ -12,7 +12,7 @@ async function webRememberDraft(job, prompt, responseId) {
   const saved = (await chrome.storage.local.get('geminiOwnedDrafts')).geminiOwnedDrafts || [];
   const hash = await digest(prompt.replace(/\s+/g, ' ').trim());
   const record = { tabId: job.geminiTab, responseId, hash, fileBase: `udemy-${job.id}` };
-  await chrome.storage.local.set({ geminiOwnedDrafts: [...saved.filter(x => x.hash !== hash), record].slice(-4) });
+  await chrome.storage.local.set({ geminiOwnedDrafts: [...saved.filter(x => x.hash !== hash), record].slice(-16) });
 }
 // Keep the conversation identity separate from its replaceable browser tab.
 function webChatUrl(value, accountIndex) {
@@ -163,11 +163,18 @@ async function webHandle(message, sender) {
     await webRememberConversation(job.geminiTab, (await chrome.tabs.get(job.geminiTab)).url || sender.url);
   }
   if (message.type === 'WEB_TASK') {
-    const ownedDrafts = ((await chrome.storage.local.get('geminiOwnedDrafts')).geminiOwnedDrafts || []).filter(x => x.tabId === job.geminiTab);
+    // An exact owned draft can survive closing/reopening its dedicated chat tab.
+    // Hash ownership is independent of the old, replaceable tab ID.
+    const ownedDrafts = ((await chrome.storage.local.get('geminiOwnedDrafts')).geminiOwnedDrafts || []).slice(-16);
     const delivering = job.recovery && job.state === 'waiting' && job.delivery?.phase !== 'submitted';
     return { id: job.id, state: job.state, conversationUrl: job.conversationUrl, chatProbe: job.chatProbe, repair: !!job.repairs, expectedEmail: job.expectedEmail, accountIndex: job.accountIndex, browserModel: job.browserModel || 'argon-medium', responseId: BrowserSubtitleCore.responseId(job), repairPrompt: job.state === 'repair-ready' ? BrowserSubtitleCore.repairPrompt(job) : undefined, srt: job.state === 'ready' ? (job.protocol === 2 ? BrowserSubtitleCore.taggedSrt(job.cues) : job.srt) : undefined, prompt: job.state === 'ready' ? BrowserSubtitleCore.prompt(BrowserSubtitleCore.responseId(job), job.cues.length) : undefined, recoverySrt: delivering && !job.repairs ? BrowserSubtitleCore.taggedSrt(job.cues) : undefined, deliveryPrompt: delivering ? (job.repairs ? BrowserSubtitleCore.repairPrompt(job) : BrowserSubtitleCore.prompt(BrowserSubtitleCore.responseId(job), job.cues.length)) : undefined, recovery: job.recovery, delivery: job.delivery, ownedDrafts, error: job.error };
   }
   if (message.id !== job.id) throw new Error('Stale Gemini response.');
+  if (message.type === 'WEB_BUSY' && ['ready', 'repair-ready'].includes(job.state)) {
+    const status = 'Gemini ၏ အရင်အဖြေ ပြီးသည်အထိ စောင့်နေပါသည်။ လက်ရှိ SRT ကို ထပ်မပို့သေးပါ။';
+    if (job.status !== status) { job.status = status; await webSave(job); }
+    return {};
+  }
   if (message.type === 'WEB_CHAT_MISSING' && job.recovery && ['ready', 'repair-ready', 'waiting'].includes(job.state)) {
     const session = (await chrome.storage.local.get('geminiBrowserSession')).geminiBrowserSession;
     const expected = webConversation(job.conversationUrl, job.accountIndex);
@@ -239,7 +246,7 @@ async function webHandle(message, sender) {
   return { idle: true };
 }
 function browserMessage(message, sender, respond) {
-  if (sender.id !== chrome.runtime.id || !message || !['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_REPAIR_SENT', 'WEB_CHAT_MISSING', 'WEB_DELIVERY', 'WEB_RETRY', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
+  if (sender.id !== chrome.runtime.id || !message || !['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_REPAIR_SENT', 'WEB_BUSY', 'WEB_CHAT_MISSING', 'WEB_DELIVERY', 'WEB_RETRY', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
   let url; try { url = new URL(sender.url); } catch { return false; }
   const udemy = url.protocol === 'https:' && (url.hostname === 'udemy.com' || url.hostname.endsWith('.udemy.com'));
   const coursera = url.protocol === 'https:' && !url.port && ['coursera.org', 'www.coursera.org'].includes(url.hostname);

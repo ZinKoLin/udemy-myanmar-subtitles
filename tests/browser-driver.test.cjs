@@ -5,10 +5,12 @@ const vm = require('node:vm');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 async function driver(options = {}) {
   let tick, wake, now = 0, uploads = 0, clicks = 0, state = 'ready', response = '', result, failure, timerActive = false, repaired = false;
+  let generatingActive = !!options.generating, busyReports = 0;
   let submittedPrompt = '', retryMenu = false, retries = 0, chatRecoveries = 0;
   const fileList = [];
   const task = { id: options.truncated ? '1234567890abcdef1234567890abcdef' : 'job', expectedEmail: 'pro@example.com', accountIndex: 2, browserModel: options.model || 'argon-medium', srt: '1\n00:00:00,000 --> 00:00:02,000\nHello\n', prompt: 'Translate the whole file. BEGIN_job END_job' };
   task.prompt = `Translate the whole file.\nBEGIN_${task.id}\nEND_${task.id}`;
+  if (options.workerRecovery) task.recovery=true;
   if (options.resumeRecovery) { state='waiting'; task.recovery=true; task.delivery={phase:'claimed'}; task.repair=false; task.responseId='job_chat1'; task.deliveryPrompt='Translate all fragments. BEGIN_job_chat1 END_job_chat1'; task.recoverySrt=task.srt; }
   if (options.missingChat) { task.conversationUrl = 'https://gemini.google.com/u/2/app/deleted-chat'; task.chatProbe = !options.noProbe; }
   const element = label => ({ style: {}, textContent: '', isConnected: false, getAttribute: name => name === 'aria-label' ? label : null, getClientRects: () => [{}], classList: { contains: () => false }, focus() {}, dispatchEvent() {} });
@@ -27,6 +29,7 @@ async function driver(options = {}) {
   modelChoice.click = () => { pickerLabel = options.model === 'hydrogen-medium' ? 'Open mode picker, currently Hydrogen Medium' : 'Open mode picker, currently Flash-Lite'; if (options.remount) { box = element('Enter a prompt for Gemini'); box.closest = () => composer; } };
   picker.click = () => {};
   const sendButton = element('Send message'); sendButton.click = () => { clicks++; if (options.stuckSend && clicks <= options.stuckSend) return; submittedPrompt = box.innerText ?? box.textContent; box.textContent = ''; composer.textContent = ''; };
+  const stopButton = element('Stop response');
   const redo = element('Redo'); redo.click = () => { retryMenu = true; };
   const again = element(); again.textContent = 'Try again'; again.click = () => { retries++; retryMenu = false; response = ''; };
   const body = { textContent: '' };
@@ -49,7 +52,7 @@ async function driver(options = {}) {
         if (selector.startsWith('[contenteditable')) return [box];
         if (selector === 'h1' && options.missingChat) { const h=element(); h.textContent='Where should we start?'; return [h]; }
         if (selector.includes('[role="progressbar"]') && options.loading) return [element()];
-        if (selector === 'button') return [picker, sendButton, redo];
+        if (selector === 'button') return [picker, sendButton, redo,...(generatingActive?[stopButton]:[])];
         if (selector === '[role="menuitem"]') return retryMenu ? [again] : [];
         if (selector === '[role="menuitemradio"]' && options.model) return [modelChoice];
         if (selector.includes('input[type=')) return options.staleInput ? [{accept:'.srt',getAttribute:()=>'.srt',dispatchEvent(){ throw new Error('Inactive uploader must not receive a file'); }},input] : [input];
@@ -62,7 +65,8 @@ async function driver(options = {}) {
       if (message.type === 'WEB_TASK') return { ok: true, ...task, state };
       if (message.type === 'WEB_DELIVERY') { if(message.stage==='ack')task.delivery.phase='submitted'; return {ok:true,claimed:true}; }
       if (message.type === 'WEB_CHAT_MISSING') { chatRecoveries++; task.conversationUrl='https://gemini.google.com/u/2/app'; task.chatProbe=false; task.responseId='job_chat1'; task.prompt='Translate all fragments. BEGIN_job_chat1 END_job_chat1'; state='ready'; return {ok:true,claimed:true}; }
-      if (message.type === 'WEB_SENT') { state = 'waiting'; return { ok: true, claimed: !options.alreadyClaimed }; }
+      if (message.type === 'WEB_BUSY') { busyReports++; return {ok:true}; }
+      if (message.type === 'WEB_SENT') { state = 'waiting'; if(task.recovery)task.delivery={phase:'claimed'}; return { ok: true, claimed: !options.alreadyClaimed }; }
       if (message.type === 'WEB_REPAIR_SENT') { state = 'waiting'; return {ok:true,claimed:true}; }
       if (message.type === 'WEB_RESULT' && options.repair && !repaired) { repaired = true; state = 'repair-ready'; task.responseId = 'job_repair1'; task.repairPrompt = 'Translate all original fragments with their IDs. BEGIN_job_repair1 END_job_repair1'; return {ok:true,repair:true}; }
       if (message.type === 'WEB_RESULT') { result = message.raw; state = 'done'; return { ok: true, done: true }; }
@@ -72,7 +76,7 @@ async function driver(options = {}) {
   });
   vm.runInContext(fs.readFileSync(require.resolve('../gemini-browser.js'), 'utf8'), context);
   await flush();
-  return { fileList, task, get chatRecoveries() { return chatRecoveries; }, get timerActive() { return timerActive; }, get retries() { return retries; }, get draft() { return box.textContent; }, get uploads() { return uploads; }, get clicks() { return clicks; }, get failure() { return failure; }, get result() { return result; }, async elapse(ms) { now += ms; }, async poll(text) { if (text !== undefined) response = text; now += 2000; tick(); await flush(); }, async nextJob() { task.id = 'job2'; delete task.responseId; task.prompt = 'Translate the whole file. BEGIN_job2 END_job2'; state = 'ready'; response = ''; result = undefined; wake({ type: 'BROWSER_JOB_AVAILABLE' }); await flush(); } };
+  return { get busyReports(){return busyReports;}, setGenerating(value){generatingActive=value;}, fileList, task, get chatRecoveries() { return chatRecoveries; }, get timerActive() { return timerActive; }, get retries() { return retries; }, get draft() { return box.textContent; }, get uploads() { return uploads; }, get clicks() { return clicks; }, get failure() { return failure; }, get result() { return result; }, async elapse(ms) { now += ms; }, async poll(text) { if (text !== undefined) response = text; now += 2000; tick(); await flush(); }, async nextJob() { task.id = 'job2'; delete task.responseId; task.prompt = 'Translate the whole file. BEGIN_job2 END_job2'; state = 'ready'; response = ''; result = undefined; wake({ type: 'BROWSER_JOB_AVAILABLE' }); await flush(); } };
 }
 test('browser uploads exactly one complete SRT and waits for a stable complete marked response', async () => {
   const app = await driver();
@@ -262,4 +266,14 @@ test('resuming a recovered chat uploads the entire SRT despite its fresh respons
  assert.equal(app.uploads,1);assert.equal(app.clicks,1);assert.equal(app.failure,undefined);
  assert.equal(await app.fileList[0].text(),app.task.srt);
  await app.poll('BEGIN_job_chat1\ncomplete\nEND_job_chat1');await app.poll();await app.poll();assert.ok(app.result);
+});
+
+
+test('a busy previous Gemini answer is awaited without errors or another file, then sends the next job once', async () => {
+ const app=await driver({generating:true,model:'hydrogen-medium',workerRecovery:true});
+ for(let i=0;i<20;i++)await app.poll();
+ assert.equal(app.failure,undefined);assert.equal(app.uploads,0);assert.equal(app.clicks,0);assert.equal(app.timerActive,true);assert.equal(app.busyReports,1);
+ app.setGenerating(false);await app.poll();assert.equal(app.uploads,1);assert.equal(app.clicks,1);
+ await app.poll('BEGIN_job\ncomplete\nEND_job');await app.poll();await app.poll();
+ assert.ok(app.result);assert.equal(app.uploads,1);assert.equal(app.clicks,1);
 });
