@@ -1,6 +1,9 @@
 ((transport) => {
   // The worker binds one dedicated Gemini tab to one Udemy job. Other Gemini chats stay untouched.
   let busy = false, stopped = false, lastRaw = '', stableSince = 0, idleCount = 0, wakePending = false, pollTimer;
+  let missingKey = '', missingSince = 0;
+  let lastErrorText = '', errorSince = 0, localRetry = { id: '', count: 0, at: 0 };
+  const clientId = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
   function startPolling() { if (!pollTimer) pollTimer = setInterval(tick, 1500); }
   function stopPolling() { clearInterval(pollTimer); pollTimer = null; lastRaw = ''; }
   const notice = document.createElement('div');
@@ -21,57 +24,156 @@
     while (Date.now() < deadline && !stopped) { const value = find(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 400)); }
     throw new Error('Gemini page controls are unavailable. Sign in, select Pro, then retry from Udemy.');
   }
+  const normalize = text => String(text || '').replace(/\s+/g, ' ').trim();
+  const draftText = box => box?.innerText ?? box?.textContent ?? '';
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  function latestQuery() { const nodes = document.querySelectorAll('user-query'); return nodes[nodes.length - 1]; }
+  function queryMatches(id) { const query = latestQuery(); const text = query?.innerText || query?.textContent || ''; return text.includes(`BEGIN_${id}`) && text.includes(`END_${id}`); }
+  function composer() { const box = editor(); return box?.closest?.('input-area-v2') || box?.closest?.('.input-area') || document.body; }
+  function missingConversation(task) {
+    if (!task.conversationUrl || !/\/app\/[^/]+$/.test(task.conversationUrl) || !location.href || generating()) return null;
+    const current = location.href.split(/[?#]/)[0];
+    const base = `https://gemini.google.com/u/${task.accountIndex}/app`;
+    if (current !== task.conversationUrl && !(task.chatProbe && current === base)) return 'changed';
+    const box = editor();
+    if (normalize(draftText(box)) || document.querySelectorAll('user-query').length) return null;
+    if (!box || Array.from(document.querySelectorAll('[role="progressbar"],[aria-busy="true"]')).some(visible)) return task.chatProbe && current === base ? 'loading' : null;
+    const fresh = Array.from(document.querySelectorAll('h1')).some(e => visible(e) && /^Where should we start\?$/i.test(normalize(e.textContent)));
+    if (task.chatProbe && current === base) return fresh ? 'redirected-empty' : 'loading';
+    const missing = Array.from(document.querySelectorAll('[role="alert"],h1,h2')).some(e => visible(e) && /^(?:This chat (?:does not exist|is (?:no longer available|not available)|was deleted)|(?:Couldn.t|Unable to|Cannot) (?:load|find) (?:this |the )?(?:chat|conversation))[.!]?$/i.test(normalize(e.textContent)));
+    return current === task.conversationUrl && missing ? 'not-found' : null;
+  }
+  async function recoverMissingChat(task) {
+    const reason = missingConversation(task);
+    if (!reason) { missingKey = ''; return false; }
+    if (reason === 'changed') throw new Error('သတ်မှတ်ထားသော Gemini chat ပြောင်းသွားပါသည်။ အခြား chat သို့ မပို့ဘဲ ရပ်ထားပါသည်။');
+    if (reason === 'loading') { missingKey = ''; display('Gemini စာမျက်နှာ အသင့်ဖြစ်သည်အထိ စောင့်နေပါသည်။'); return true; }
+    await verifyAccount(task);
+    const key = task.id + task.conversationUrl + reason;
+    if (missingKey !== key) { missingKey = key; missingSince = Date.now(); display('မူလ Gemini chat ရှိမရှိ အတည်ပြုနေပါသည်။'); return true; }
+    if (Date.now() - missingSince < 3000) return true;
+    const result = await send({ type: 'WEB_CHAT_MISSING', id: task.id, conversationUrl: task.conversationUrl, reason });
+    if (!result.claimed) throw new Error('Gemini chat အခြေအနေ ပြောင်းလဲသွားပါသည်။ မူလ chat ကို မပြောင်းဘဲ ရပ်ထားပါသည်။');
+    missingKey = ''; lastRaw = ''; stableSince = 0;
+    display('မူလ chat မရှိတော့သဖြင့် chat အသစ်တစ်ခုကိုသာ ဆက်သုံးပြီး ဘာသာပြန်နေပါသည်။');
+    return true;
+  }
+  function fileLabelMatches(label, base) {
+    const value = normalize(label).replace(/^(?:close|remove|delete)\s+/i, '').replace(/\.srt$/i, '');
+    if (value === base) return true;
+    const parts = value.split(/\.\.\.|…/);
+    return parts.length === 2 && parts[0].length >= 8 && parts[1].length >= 8 && base.startsWith(parts[0]) && base.endsWith(parts[1]);
+  }
+  function attachmentPresent(task) {
+    const root = composer(), base = `udemy-${task.id}`;
+    return (root.textContent || '').includes(base) || Array.from(root.querySelectorAll?.('.gem-attachment-text,[aria-label],[title]') || []).some(e => fileLabelMatches(e.textContent, base) || fileLabelMatches(e.getAttribute('aria-label'), base) || fileLabelMatches(e.getAttribute('title'), base));
+  }
+  async function verifyAccount(task) {
+    const accounts = await waitFor(() => { const nodes = Array.from(document.querySelectorAll('a[aria-label*="Google Account:"],button[aria-label*="Google Account:"]')); return nodes.length && nodes; });
+    if (!accounts.some(e => (e.getAttribute('aria-label') || '').toLowerCase().includes(`(${task.expectedEmail})`))) throw new Error('This is not the configured Pro account. No subtitle file was uploaded. Check the account number and email in extension settings.');
+  }
+  async function draftOwner(task, text) {
+    const value = normalize(text);
+    if (!value) return null;
+    const expected = task.deliveryPrompt || task.prompt || task.repairPrompt;
+    if (expected && value === normalize(expected)) return { responseId: task.responseId || task.id, fileBase: `udemy-${task.id}` };
+    const candidates = (task.ownedDrafts || []).filter(x => value.includes(`BEGIN_${x.responseId}`) && value.includes(`END_${x.responseId}`));
+    if (!candidates.length) return null;
+    const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), n => n.toString(16).padStart(2, '0')).join('');
+    return candidates.find(x => x.hash === hash) || null;
+  }
+  async function clearOwnedDraft(task) {
+    const box = editor();
+    if (!box || generating()) return false;
+    const owner = await draftOwner(task, draftText(box)) || (!normalize(draftText(box)) && (task.ownedDrafts || []).find(x => attachmentPresent({ id: x.fileBase.slice(6) })));
+    if (!owner) return false;
+    const root = composer();
+    for (const button of Array.from(root.querySelectorAll?.('button') || [])) {
+      if (!/^(?:close|remove|delete)\b/i.test(button.getAttribute('aria-label') || '')) continue;
+      if (fileLabelMatches(button.getAttribute('aria-label'), owner.fileBase)) { button.click(); continue; }
+      let container = button;
+      for (let depth = 0; container && container !== root && depth < 6; depth++, container = container.parentElement) {
+        if ((container.textContent || '').includes(owner.fileBase) && container.querySelectorAll('button').length <= 2) { button.click(); break; }
+      }
+    }
+    box.focus(); document.execCommand('selectAll', false); document.execCommand('delete', false);
+    if (draftText(box).trim()) { box.textContent = ''; box.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' })); }
+    if (attachmentPresent({ id: owner.fileBase.slice(6) })) throw new Error('ယခင် SRT attachment ကို မရှင်းနိုင်ပါ။ အခြားဖိုင်နှင့် ရောမပို့ပါ။');
+    return true;
+  }
+  async function deliveryClaim(task, stage) {
+    const current = await send({ type: 'WEB_TASK' });
+    if (current.id !== task.id || current.state !== 'waiting' || (current.responseId || current.id) !== (task.responseId || task.id)) return false;
+    if (!task.recovery) return true;
+    const result = await send({ type: 'WEB_DELIVERY', id: task.id, responseId: task.responseId || task.id, stage, clientId });
+    return result.claimed;
+  }
+  async function deliver(task, repairOnly = false) {
+    const id = task.responseId || task.id, prompt = task.deliveryPrompt || task.repairPrompt || task.prompt;
+    if (queryMatches(id)) { await deliveryClaim(task, 'ack'); return; }
+    await verifyAccount(task);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let box = await waitFor(editor);
+      if (draftText(box).trim() && normalize(draftText(box)) !== normalize(prompt)) {
+        if (!await clearOwnedDraft(task)) throw new Error('Gemini ထဲတွင် ကိုယ်တိုင်ရေးထားသော draft ရှိနေပါသည်။ မဖျက်ဘဲ ရပ်ထားပါသည်။');
+        box = await waitFor(editor);
+      }
+      if (generating()) throw new Error('Gemini မှာ အခြားအဖြေ ပြင်ဆင်နေပါသည်။ ထပ်မပို့ပါ။');
+      if (!repairOnly && !attachmentPresent(task)) {
+        if (!await deliveryClaim(task, 'upload')) return;
+        const findInput = () => { const local = Array.from(composer().querySelectorAll?.('input[type="file"]') || []); return (local.length ? local : Array.from(document.querySelectorAll('input[type="file"]'))).filter(e => (e.getAttribute('accept') || e.accept || '').includes('.srt')).at(-1); };
+        let input = findInput();
+        if (!input) { buttons().find(e => /upload.*tools/i.test(e.getAttribute('aria-label') || ''))?.click(); input = await waitFor(findInput, 10000); }
+        display('ဗီဒီယိုတစ်ခုလုံး၏ SRT ဖိုင် တင်ပြီးကြောင်း စစ်နေပါသည်။');
+        const transfer = new DataTransfer(); transfer.items.add(new File([task.recoverySrt || task.srt], `udemy-${task.id}.srt`, { type: 'text/plain' }));
+        input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+        try { await waitFor(() => attachmentPresent(task) && !Array.from(composer().querySelectorAll?.('[role="progressbar"],.upload-progress,[aria-busy="true"]') || []).some(visible), 30000); }
+        catch (error) { if (attempt === 0) continue; throw error; }
+      }
+      // Model selection and uploading can replace the editor. Never reuse its old node.
+      box = await waitFor(editor);
+      if (!draftText(box).trim()) {
+        box.focus();
+        if (!document.execCommand('insertText', false, prompt)) { box.textContent = prompt; box.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: prompt })); }
+      }
+      if (normalize(draftText(box)) !== normalize(prompt)) throw new Error('Gemini draft ပြောင်းလဲသွားပါသည်။ ကိုယ်တိုင်ရေးထားသည့်စာကို မပို့ပါ။');
+      const button = await waitFor(() => { const b = submit(); return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' && b; });
+      if (!await deliveryClaim(task, 'send')) return;
+      button.click();
+      try { await waitFor(() => queryMatches(id), 15000); await deliveryClaim(task, 'ack'); display('SRT ပို့ပြီးပါပြီ။ ဘာသာပြန်အဖြေ အပြည့်ကို စောင့်နေပါသည်။'); return; }
+      catch (error) {
+        if (queryMatches(id)) { await deliveryClaim(task, 'ack'); return; }
+        if (normalize(draftText(editor())) !== normalize(prompt)) throw new Error('ပို့ပြီးကြောင်း မအတည်ပြုနိုင်ပါ။ နှစ်ခါမပို့ရန် ရပ်ထားပါသည်။');
+        if (attempt === 1) throw error;
+        display('Gemini က draft ကို မပို့ရသေးပါ။ လက်ရှိ draft ကို တစ်ကြိမ် ပြန်ပို့နေပါသည်။');
+      }
+    }
+  }
   async function upload(task) {
     let box = editor();
     if (!box) { display('Gemini မှာ login ဝင်ပါ။ စာရေးကွက်ပေါ်လာလျှင် ဆက်လုပ်ပါမည်။'); return; }
-    const accounts = await waitFor(() => {
-      const nodes = Array.from(document.querySelectorAll('a[aria-label*="Google Account:"],button[aria-label*="Google Account:"]'));
-      return nodes.length && nodes;
-    });
-    if (!accounts.some(e => (e.getAttribute('aria-label') || '').toLowerCase().includes(`(${task.expectedEmail})`))) throw new Error('This is not the configured Pro account. No subtitle file was uploaded. Check the account number and email in extension settings.');
+    await verifyAccount(task);
+    if (await recoverMissingChat(task)) return;
+    if (!generating()) await clearOwnedDraft(task);
     // Gemini briefly restores its editor while loading a saved chat. Never erase a draft or mistake hydration for a user draft.
     const editorDeadline = Date.now() + 15000;
-    while ((!box || box.textContent.trim() || generating()) && Date.now() < editorDeadline) {
+    while ((!box || draftText(box).trim() || generating()) && Date.now() < editorDeadline) {
       await new Promise(resolve => setTimeout(resolve, 400)); box = editor();
     }
-    if (!box || box.textContent.trim() || generating()) {
+    if (!box || draftText(box).trim() || generating()) {
       const current = await send({ type: 'WEB_TASK' });
       if (current.id !== task.id || current.state !== 'ready') return;
       throw new Error('The dedicated Gemini tab already contains a draft or active response. Finish or clear it, then retry from Udemy.');
     }
+    if (await recoverMissingChat(task)) return;
     await selectModel(task.browserModel || 'argon-medium');
-    const findInput = () => Array.from(document.querySelectorAll('input[type="file"]')).find(e => (e.accept || '').includes('.srt'));
-    let input = findInput();
-    if (!input) {
-      const tools = buttons().find(e => /upload.*tools/i.test(e.getAttribute('aria-label') || ''));
-      if (tools) tools.click();
-      input = await waitFor(findInput, 10000);
-    }
+    await delay(700);
     // Mark before upload/send: a reload must never silently send the same lecture twice.
-    const claim = await send({ type: 'WEB_SENT', id: task.id });
+    const claim = await send({ type: 'WEB_SENT', id: task.id, clientId });
     if (!claim.claimed) return;
-    display('ဗီဒီယိုတစ်ခုလုံး၏ SRT ဖိုင်ကို တင်နေပါသည်။\nဒီ tab ကို မပိတ်ပါနှင့်။');
-    const transfer = new DataTransfer();
-    transfer.items.add(new File([task.srt], `udemy-${task.id}.srt`, { type: 'text/plain' }));
-    input.files = transfer.files;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-    box.focus();
-    if (!document.execCommand('insertText', false, task.prompt)) {
-      box.textContent = task.prompt;
-      box.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: task.prompt }));
-    }
-    // Let the editor and attachment upload settle before checking the enabled Send control.
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    const button = await waitFor(() => {
-      const b = submit();
-      const attachment = document.body.textContent.includes(`udemy-${task.id}.srt`);
-      const loading = Array.from(document.querySelectorAll('[role="progressbar"],.upload-progress')).some(visible);
-      return attachment && !loading && b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' && b;
-    }, 90000);
     const current = await send({ type: 'WEB_TASK' });
     if (current.id !== task.id || current.state !== 'waiting') return;
-    button.click();
-    display('SRT ဖိုင်တစ်ခုလုံးကို ဘာသာပြန်နေပါသည်။\nအဖြေအကုန်ရလျှင် Udemy သို့ အလိုအလျောက် ပြန်ပို့ပါမည်။');
+    await deliver({ ...task, ...current, srt: task.srt, prompt: task.prompt });
   }
   async function selectModel(model) {
     if (model === 'current') return;
@@ -103,19 +205,48 @@
   }
   async function repair(task) {
     const box = await waitFor(editor);
-    if (box.textContent.trim() || generating()) throw new Error('Gemini chat ထဲတွင် draft သို့မဟုတ် အဖြေတစ်ခု ရှိနေပါသည်။ အရင်ရှင်းပြီး Udemy မှ ပြန်စပါ။');
-    const claim = await send({ type: 'WEB_REPAIR_SENT', id: task.id });
+    if (!generating()) await clearOwnedDraft(task);
+    if (draftText(box).trim() || generating()) throw new Error('Gemini chat ထဲတွင် draft သို့မဟုတ် အဖြေတစ်ခု ရှိနေပါသည်။ အရင်ရှင်းပြီး Udemy မှ ပြန်စပါ။');
+    const claim = await send({ type: 'WEB_REPAIR_SENT', id: task.id, clientId });
     if (!claim.claimed) return;
-    box.focus();
-    if (!document.execCommand('insertText', false, task.repairPrompt)) {
-      box.textContent = task.repairPrompt;
-      box.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: task.repairPrompt }));
-    }
-    const button = await waitFor(() => { const b = submit(); return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' && b; });
     const current = await send({ type: 'WEB_TASK' });
     if (current.id !== task.id || current.state !== 'waiting') return;
-    button.click(); lastRaw = ''; stableSince = 0;
+    await deliver({ ...task, ...current, repairPrompt: task.repairPrompt }, true); lastRaw = ''; stableSince = 0;
     display('စာကြောင်းအရေအတွက် မကိုက်သဖြင့် မူရင်း ID များဖြင့် ပြန်ဘာသာပြန်နေပါသည်။\nအကုန်ပြည့်မှ Udemy တွင် စာတန်းပြပါမည်။');
+  }
+  function ownedResponse(node, id) {
+    const query = latestQuery(), position = query?.compareDocumentPosition?.(node) || 0;
+    return queryMatches(id) && (position & 4) && !(position & 1);
+  }
+  function latestResponse() { return Array.from(document.querySelectorAll('model-response .markdown, model-response message-content, .model-response-text')).at(-1); }
+  function transientError(id) {
+    const node = latestResponse();
+    if (!node || !ownedResponse(node, id)) return null;
+    const text = normalize(node.innerText || node.textContent);
+    if (!/^(?:Sorry, something went wrong\. Please try your request again\.|I encountered an error doing what you asked\. Could you try again\?|Something went wrong\. Please try again\.?)$/i.test(text)) return null;
+    return { node, text };
+  }
+  async function retryError(task, error) {
+    await verifyAccount(task);
+    const id = task.responseId || task.id;
+    if (task.recovery) {
+      const claim = await send({ type: 'WEB_RETRY', id: task.id, responseId: id });
+      if (!claim.claimed) return;
+    } else {
+      if (localRetry.id !== id) localRetry = { id, count: 0, at: 0 };
+      if (Date.now() - localRetry.at < 30000 && localRetry.count) return;
+      if (localRetry.count >= 2) throw new Error('Gemini error ကို နှစ်ကြိမ်ပြန်စမ်းပြီး မအောင်မြင်ပါ။');
+      localRetry.count++; localRetry.at = Date.now();
+    }
+    const response = error.node.closest?.('model-response');
+    const redo = Array.from(response?.querySelectorAll('button') || []).find(b => /^redo$/i.test(b.getAttribute('aria-label') || '')) || buttons().filter(b => /^redo$/i.test(b.getAttribute('aria-label') || '')).at(-1);
+    if (!redo) throw new Error('Gemini error ကို ပြန်စမ်းရန် Redo ခလုတ် မတွေ့ပါ။');
+    redo.click();
+    const choice = await waitFor(() => Array.from(document.querySelectorAll('[role="menuitem"]')).find(e => visible(e) && /^Try again$/i.test(e.textContent.trim())), 10000);
+    const current = await send({ type: 'WEB_TASK' });
+    if (current.id !== task.id || current.state !== 'waiting' || (current.responseId || current.id) !== id || !ownedResponse(error.node, id)) return;
+    choice.click(); lastErrorText = ''; errorSince = 0; lastRaw = ''; stableSince = 0;
+    display('Gemini ယာယီ error ကို အလိုအလျောက် ပြန်စမ်းနေပါသည်။ SRT ကို ထပ်မတင်ပါ။');
   }
   function responseText(id) {
     // Only model responses; never accept the prompt, sidebar, or unrelated chat text.
@@ -161,26 +292,37 @@
       task = await send({ type: 'WEB_TASK' });
       if (task.idle) { if (notice.isConnected) { display('ဒီဘာသာပြန်လုပ်ငန်းကို ရပ်ထားပါသည်။'); stopped = true; } else if (++idleCount > 5 || !location.hash.includes('udemy-srt=')) stopped = true; return; }
       if (['done', 'cancelled', 'error'].includes(task.state)) {
+        if (!generating()) await clearOwnedDraft(task);
         stopped = true;
         display(task.state === 'done' ? 'ဘာသာပြန်ပြီးပါပြီ။ သင်ခန်းစာမှာ စာတန်းထိုး အသင့်ဖြစ်ပါပြီ။' : task.state === 'cancelled' ? 'ဘာသာပြန်မှုကို ရပ်ထားပါသည်။' : task.error);
         return;
       }
+      if (await recoverMissingChat(task)) return;
       if (task.state === 'ready') await upload(task);
       if (task.state === 'repair-ready') await repair(task);
       if (task.state === 'waiting') {
+        if (task.recovery && task.delivery?.phase !== 'submitted') await deliver(task, !!task.repair);
+        const error = !generating() && transientError(task.responseId || task.id);
+        if (error) {
+          if (lastErrorText !== error.text) { lastErrorText = error.text; errorSince = Date.now(); return; }
+          if (Date.now() - errorSince >= 3000) await retryError(task, error);
+          return;
+        }
+        lastErrorText = ''; errorSince = 0;
         const raw = responseText(task.responseId || task.id);
         if (!raw || generating()) { lastRaw = ''; stableSince = 0; return; }
         if (raw !== lastRaw) { lastRaw = raw; stableSince = Date.now(); return; }
         if (Date.now() - stableSince >= 3000) {
-          const result = await send({ type: 'WEB_RESULT', id: task.id, raw });
+          const result = await send({ type: 'WEB_RESULT', id: task.id, responseId: task.responseId || task.id, raw });
           if (result.repair) { lastRaw = ''; stableSince = 0; display('စာကြောင်းမပြည့်သဖြင့် အလိုအလျောက် ပြန်တောင်းနေပါသည်။'); return; }
           if (!result.done) { lastRaw = ''; stableSince = 0; return; }
           display('ဘာသာပြန်ပြီးပါပြီ။ သင်ခန်းစာမှာ စာတန်းထိုး အသင့်ဖြစ်ပါပြီ။'); stopped = true;
         }
       }
     } catch (error) {
+      if (task?.id && !generating()) { try { const current = await send({ type: 'WEB_TASK' }); if (current.id === task.id) await clearOwnedDraft(current); } catch { /* Preserve an attachment if ownership cannot be proved. */ } }
       display(error.message);
-      if (task?.id) { try { await send({ type: 'WEB_ERROR', id: task.id, error: error.message }); } catch {} }
+      if (task?.id) { try { await send({ type: 'WEB_ERROR', id: task.id, responseId: task.responseId || task.id, error: error.message }); } catch {} }
       stopped = true;
     } finally {
       busy = false;
@@ -191,7 +333,7 @@
   // Idle between jobs without polling the worker. A new lecture wakes this same chat adapter.
   if (typeof chrome !== 'undefined' && chrome.runtime?.id) chrome.runtime.onMessage?.addListener((message, sender, respond) => {
     if (message?.type !== 'BROWSER_JOB_AVAILABLE') return false;
-    stopped = false; lastRaw = ''; stableSince = 0; idleCount = 0;
+    stopped = false; missingKey = ''; lastRaw = ''; stableSince = 0; idleCount = 0; lastErrorText = ''; errorSince = 0;
     startPolling();
     if (busy) wakePending = true; else tick(); respond?.({ ok: true }); return false;
   });

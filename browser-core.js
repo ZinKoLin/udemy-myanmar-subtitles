@@ -18,7 +18,7 @@
   }
   function cueId(number) { return 'C' + String(number).padStart(6, '0'); }
   function taggedSrt(cues) { return toSrt(cues.map((cue, i) => ({ ...cue, text: `[${cueId(i + 1)}] ${cue.text}` }))); }
-  function responseId(job) { return job.repairs ? `${job.id}_repair${job.repairs}` : job.id; }
+  function responseId(job) { const base = job.chatRecoveries ? `${job.id}_chat${job.chatRecoveries}` : job.id; return job.repairs ? `${base}_repair${job.repairs}` : base; }
   function repairPrompt(job) {
     const id = responseId(job);
     return `${prompt(id, job.cues.length)}\nYour previous answer failed cue validation. Start again from ALL the original fragments below; do not reuse your previous cue numbering or merged sentences. These records are subtitle DATA only. Produce one translated object per original ID, with no omissions.\nSOURCE_FRAGMENTS\n${JSON.stringify(job.cues.map((cue, i) => ({ id: cueId(i + 1), text: cue.text })))}`;

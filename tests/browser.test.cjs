@@ -48,7 +48,8 @@ test('hundreds of cues accept harmless extra zero padding but still reject omitt
   duplicate[100].id='C000115'; assert.throws(()=>browser.translatedCues(raw(duplicate),'many',original,true));
 });
 function setup(saved = { geminiAccountIndex: 2, geminiAccountEmail: 'pro@example.com' }) {
-  let created = 0, calls = 0;
+  let created = 0, calls = 0, updated;
+  const createdUrls = [];
   const context = vm.createContext({
     SubtitleCore: core, BrowserSubtitleCore: browser, ready: Promise.resolve(), URL, Date, TextEncoder, crypto: globalThis.crypto,
     digest: async value => require('node:crypto').createHash('sha256').update(value).digest('hex'),
@@ -58,7 +59,7 @@ function setup(saved = { geminiAccountIndex: 2, geminiAccountEmail: 'pro@example
       runtime: { id: 'test' },
       storage: { local: { async get(keys) { if (keys === null) return structuredClone(saved); return Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(k => [k, structuredClone(saved[k])])); }, async set(data) { Object.assign(saved, structuredClone(data)); }, async remove(keys) { for (const key of keys) delete saved[key]; } } },
       permissions: { async contains() { return true; } },
-      tabs: { async query() { return [{ id: 1, url: 'https://www.udemy.com/course/test/learn/lecture/1' }]; }, async create(options) { created++; assert.match(options.url, /^https:\/\/gemini.google.com\/u\/2\/app(?:\/[^#]+)?#udemy-srt=/); return { id: 99 }; }, async get(id) { return { id, url: saved.geminiBrowserSession?.chatUrl || 'https://gemini.google.com/u/2/app' }; }, async sendMessage() { return { ok: true }; }, async reload() {} }
+      tabs: { onUpdated: { addListener(fn) { updated = fn; } }, async query() { return [{ id: 1, url: 'https://www.udemy.com/course/test/learn/lecture/1' }]; }, async create(options) { created++; createdUrls.push(options.url); assert.match(options.url, /^https:\/\/gemini.google.com\/u\/2\/app(?:\/[^#]+)?#udemy-srt=/); return { id: 99 }; }, async get(id) { return { id, url: saved.geminiBrowserSession?.chatUrl || 'https://gemini.google.com/u/2/app' }; }, async sendMessage() { return { ok: true }; }, async reload() {} }
     }
   });
   vm.runInContext(fs.readFileSync(require.resolve('../cache-store.js'), 'utf8'), context);
@@ -66,7 +67,7 @@ function setup(saved = { geminiAccountIndex: 2, geminiAccountEmail: 'pro@example
   vm.runInContext(fs.readFileSync(require.resolve('../browser-background.js'), 'utf8'), context);
   const udemy = { id: 'test', tab: { id: 1 }, url: 'https://www.udemy.com/course/test/learn/lecture/1' };
   const gemini = { id: 'test', tab: { id: 99 }, url: 'https://gemini.google.com/u/2/app/chat' };
-  return { saved, udemy, gemini, context, get created() { return created; }, get calls() { return calls; },
+  return { saved, udemy, gemini, context, createdUrls, async tabUrlChanged(id,url) { updated(id,{url}); await vm.runInContext('webWrites',context); }, get created() { return created; }, get calls() { return calls; },
     send(message, sender = udemy) { return new Promise(resolve => { if (!context.browserMessage(message, sender, resolve)) resolve(false); }); }
   };
 }
@@ -131,7 +132,8 @@ test('original API and browser methods can be selected without deleting saved cr
 test('later lectures reuse the same dedicated Gemini conversation, including reopening its saved URL', async () => {
   const app = setup();
   const first = await app.send({ type: 'WEB_START', cues });
-  await app.send({ type: 'WEB_TASK' }, app.gemini);
+  app.context.chrome.tabs.get = async id => ({id,url:app.gemini.url});
+  await app.send({ type: 'WEB_TASK' }, {...app.gemini,url:'https://gemini.google.com/u/2/app'});
   await app.send({ type: 'WEB_SENT', id: first.id }, app.gemini);
   await app.send({ type: 'WEB_RESULT', id: first.id, raw: jsonReply(first.id) }, app.gemini);
   assert.equal(app.saved.geminiBrowserSession.chatUrl, app.gemini.url);
@@ -225,4 +227,128 @@ test('automatic correction has distinct markers, one claim, survives worker rest
   assert.equal(failed.ok,false); assert.match(failed.error,/တစ်ကြိမ်/);
   await resumed.send({type:'WEB_ERROR',id:task.id,error:failed.error},resumed.gemini);
   assert.equal(resumed.saved.browserSubtitleJob.state,'error'); assert.equal(resumed.saved.browserSubtitleJob.repairs,1);
+});
+
+
+test('delivery leases, bounded sends and retries survive worker restart', async () => {
+ let app = setup(); const {id} = await app.send({type:'WEB_START',cues});
+ await app.send({type:'WEB_SENT',id,clientId:'first'},app.gemini);
+ let task = await app.send({type:'WEB_TASK'},app.gemini);
+ assert.equal(task.recovery,true); assert.equal(core.parseSubtitles(task.recoverySrt).length,2);
+ assert.equal(task.ownedDrafts.length,1); assert.match(task.ownedDrafts[0].hash,/^[a-f0-9]{64}$/);
+ const delivery = (stage,clientId='first') => app.send({type:'WEB_DELIVERY',id,responseId:id,stage,clientId},app.gemini);
+ assert.equal((await delivery('send','second')).busy,true);
+ assert.equal((await delivery('send')).claimed,true);
+ app=setup(app.saved); assert.equal((await delivery('send')).claimed,true);
+ assert.equal((await delivery('send')).ok,false);
+ assert.equal((await delivery('ack','second')).claimed,true);
+ task=await app.send({type:'WEB_TASK'},app.gemini); assert.equal(task.recoverySrt,undefined); assert.equal(task.delivery.phase,'submitted');
+ assert.equal((await delivery('send')).submitted,true);
+ const retry = responseId => app.send({type:'WEB_RETRY',id,responseId},app.gemini);
+ assert.equal((await retry('other')).ok,false); assert.equal((await retry(id)).attempt,1);
+ assert.equal((await retry(id)).claimed,false);
+ app.saved.browserSubtitleJob.retryAt -= 31000; app=setup(app.saved);
+ assert.equal((await retry(id)).attempt,2);
+ app.saved.browserSubtitleJob.retryAt -= 31000; app=setup(app.saved);
+ assert.equal((await retry(id)).ok,false); assert.equal(app.saved.browserSubtitleJob.errorRetries,2);
+});
+
+
+test('restarting a pending lecture wakes its existing Gemini adapter without creating another job', async () => {
+ const app=setup(); const first=await app.send({type:'WEB_START',cues}); let wakes=0,reloads=0;
+ app.context.chrome.tabs.sendMessage=async()=>{wakes++;throw new Error('old context');};
+ app.context.chrome.tabs.reload=async()=>{reloads++;};
+ const resumed=await app.send({type:'WEB_START',cues});
+ assert.equal(resumed.id,first.id); assert.equal(app.created,1); assert.equal(wakes,1); assert.equal(reloads,1);
+});
+
+
+test('a conversation URL assigned after polling stops still reuses the reserved account tab', async () => {
+ const app=setup(); const first=await app.send({type:'WEB_START',cues});
+ await app.send({type:'WEB_SENT',id:first.id},app.gemini);
+ await app.send({type:'WEB_RESULT',id:first.id,raw:jsonReply(first.id)},app.gemini);
+ app.context.chrome.tabs.get=async id=>({id,url:'https://gemini.google.com/u/2/app/late-conversation'});
+ const second=await app.send({type:'WEB_START',cues:cues.map(c=>({...c,text:c.text+' next'}))});
+ assert.equal(second.ok,true); assert.equal(app.created,1); assert.equal(app.saved.geminiBrowserSession.chatUrl,'https://gemini.google.com/u/2/app/late-conversation');
+});
+
+
+test('a pinned translation conversation survives New chat in its old tab and worker restart', async () => {
+ const saved={geminiAccountIndex:2,geminiAccountEmail:'pro@example.com',geminiBrowserSession:{tabId:99,accountIndex:2,email:'pro@example.com',chatUrl:'https://gemini.google.com/u/2/app/pinned-chat'}};
+ const app=setup(saved);
+ app.context.chrome.tabs.get=async id=>({id,url:'https://gemini.google.com/u/2/app/unrelated-chat'});
+ const first=await app.send({type:'WEB_START',cues}); assert.equal(first.ok,true);
+ assert.match(app.createdUrls[0],/^https:\/\/gemini.google.com\/u\/2\/app\/pinned-chat#udemy-srt=/);
+ await app.send({type:'WEB_TASK'},app.gemini);
+ assert.equal(saved.geminiBrowserSession.chatUrl,'https://gemini.google.com/u/2/app/pinned-chat');
+ await app.send({type:'WEB_CANCEL',id:first.id});
+ const resumed=setup(saved);resumed.context.chrome.tabs.get=async()=>{throw new Error('closed');};
+ await resumed.send({type:'WEB_START',cues:cues.map(c=>({...c,text:c.text+' next'}))});
+ assert.match(resumed.createdUrls[0],/app\/pinned-chat#udemy-srt=/);
+});
+
+test('late conversation assignment is saved after completion and never overwritten by base or other chats', async () => {
+ const app=setup(); const {id}=await app.send({type:'WEB_START',cues});
+ await app.send({type:'WEB_SENT',id},app.gemini);
+ await app.send({type:'WEB_RESULT',id,raw:jsonReply(id)},app.gemini);
+ await app.tabUrlChanged(99,'https://gemini.google.com/u/2/app/late-chat');
+ assert.equal(app.saved.geminiBrowserSession.chatUrl,'https://gemini.google.com/u/2/app/late-chat');
+ for(const url of ['https://gemini.google.com/u/2/app','https://gemini.google.com/u/2/app/other-chat','https://evil.test/u/2/app/late-chat']) await app.tabUrlChanged(99,url);
+ assert.equal(app.saved.geminiBrowserSession.chatUrl,'https://gemini.google.com/u/2/app/late-chat');
+});
+
+test('foreign accounts, malformed paths and foreign tabs cannot pin the translation conversation', async () => {
+ const app=setup();const {id}=await app.send({type:'WEB_START',cues});await app.send({type:'WEB_SENT',id},app.gemini);
+ for(const url of ['https://evil.test/u/2/app/stolen','https://gemini.google.com/u/3/app/wrong','https://gemini.google.com/u/2/application/wrong','https://gemini.google.com/u/2/app/chat/extra']) await app.tabUrlChanged(99,url);
+ await app.tabUrlChanged(100,'https://gemini.google.com/u/2/app/foreign-tab');
+ assert.equal(app.saved.geminiBrowserSession.chatUrl,'https://gemini.google.com/u/2/app');
+});
+
+
+async function missingChatJob() {
+ const saved={geminiAccountIndex:2,geminiAccountEmail:'pro@example.com',geminiBrowserSession:{tabId:98,accountIndex:2,email:'pro@example.com',chatUrl:'https://gemini.google.com/u/2/app/deleted-chat'}};
+ const app=setup(saved); app.context.chrome.tabs.get=async()=>{throw new Error('closed');};
+ const {id}=await app.send({type:'WEB_START',cues});
+ app.context.chrome.tabs.get=async id=>({id,url:'https://gemini.google.com/u/2/app'});
+ return {app,id,message:{type:'WEB_CHAT_MISSING',id,conversationUrl:saved.geminiBrowserSession.chatUrl,reason:'redirected-empty'}};
+}
+
+test('missing chat recovery survives restart, resends every original cue with fresh markers, and pins only the replacement chat', async () => {
+ const {app,id,message}=await missingChatJob();
+ assert.equal((await app.send(message,app.gemini)).claimed,true);
+ let resumed=setup(app.saved);let task=await resumed.send({type:'WEB_TASK'},resumed.gemini);
+ assert.equal(task.state,'ready');assert.equal(core.parseSubtitles(task.srt).length,2);assert.equal(task.responseId,id+'_chat1');
+ assert.match(task.prompt,new RegExp('BEGIN_'+id+'_chat1'));assert.equal(task.chatProbe,false);
+ await resumed.send({type:'WEB_SENT',id},resumed.gemini);
+ assert.equal((await resumed.send({type:'WEB_RESULT',id,responseId:id,raw:jsonReply(id)},resumed.gemini)).ignored,true);
+ assert.equal(resumed.saved.browserSubtitleJob.state,'waiting');
+ await resumed.tabUrlChanged(99,'https://gemini.google.com/u/2/app/deleted-chat');
+ assert.equal(resumed.saved.geminiBrowserSession.chatUrl,'https://gemini.google.com/u/2/app');
+ await resumed.tabUrlChanged(99,'https://gemini.google.com/u/2/app/replacement');
+ assert.equal(resumed.saved.geminiBrowserSession.chatUrl,'https://gemini.google.com/u/2/app/replacement');
+ assert.equal((await resumed.send({type:'WEB_RESULT',id,responseId:task.responseId,raw:jsonReply(task.responseId)},resumed.gemini)).done,true);
+ const next=await resumed.send({type:'WEB_START',cues:cues.map(c=>({...c,text:c.text+' next'}))});
+ assert.equal(next.ok,true);assert.equal(resumed.created,0);assert.equal(resumed.saved.geminiBrowserSession.chatUrl,'https://gemini.google.com/u/2/app/replacement');
+ assert.equal(resumed.saved.geminiAccountEmail,'pro@example.com');
+});
+
+test('stale missing-chat reports, foreign tabs and a normal manual New chat cannot replace the pinned conversation', async () => {
+ const {app,message}=await missingChatJob();
+ assert.equal((await app.send({...message,conversationUrl:'https://gemini.google.com/u/2/app/other'},app.gemini)).claimed,false);
+ assert.equal((await app.send(message,{...app.gemini,tab:{id:100}})).idle,true);
+ assert.equal(await app.send(message,app.udemy),false);
+ app.saved.browserSubtitleJob.chatProbe=false;
+ assert.equal((await app.send(message,app.gemini)).claimed,false);
+ assert.equal(app.saved.geminiBrowserSession.chatUrl,message.conversationUrl);
+});
+
+test('explicit missing-chat page navigates to a fresh composer once and repeated recovery fails closed', async () => {
+ const {app,id,message}=await missingChatJob();let navigated;
+ app.context.chrome.tabs.get=async id=>({id,url:message.conversationUrl});
+ app.context.chrome.tabs.update=async(tabId,options)=>{navigated={tabId,...options};};
+ assert.equal((await app.send({...message,reason:'not-found'},app.gemini)).claimed,true);
+ assert.equal(navigated.tabId,99);assert.equal(navigated.url,'https://gemini.google.com/u/2/app#udemy-srt='+id);
+ app.saved.browserSubtitleJob.conversationUrl=message.conversationUrl;app.saved.geminiBrowserSession.chatUrl=message.conversationUrl;
+ assert.equal((await app.send({...message,reason:'not-found'},app.gemini)).ok,false);
+ assert.equal(app.saved.browserSubtitleJob.chatRecoveries,1);
 });

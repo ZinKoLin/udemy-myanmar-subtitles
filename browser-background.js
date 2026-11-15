@@ -8,6 +8,42 @@ function webSerial(action) {
 }
 async function webRead() { return (await chrome.storage.local.get(webJobKey))[webJobKey]; }
 async function webSave(job) { await chrome.storage.local.set({ [webJobKey]: job }); }
+async function webRememberDraft(job, prompt, responseId) {
+  const saved = (await chrome.storage.local.get('geminiOwnedDrafts')).geminiOwnedDrafts || [];
+  const hash = await digest(prompt.replace(/\s+/g, ' ').trim());
+  const record = { tabId: job.geminiTab, responseId, hash, fileBase: `udemy-${job.id}` };
+  await chrome.storage.local.set({ geminiOwnedDrafts: [...saved.filter(x => x.hash !== hash), record].slice(-4) });
+}
+// Keep the conversation identity separate from its replaceable browser tab.
+function webChatUrl(value, accountIndex) {
+  try {
+    const url = new URL(value);
+    if (url.origin === 'https://gemini.google.com' && !url.username && !url.password && new RegExp(`^/u/${accountIndex}/app(?:/[a-zA-Z0-9_-]+)?$`).test(url.pathname)) return url.origin + url.pathname;
+  } catch {}
+  return null;
+}
+function webConversation(value, accountIndex) {
+  const url = webChatUrl(value, accountIndex);
+  return url && url !== `https://gemini.google.com/u/${accountIndex}/app` ? url : null;
+}
+async function webRememberConversation(tabId, value) {
+  const session = (await chrome.storage.local.get('geminiBrowserSession')).geminiBrowserSession;
+  if (session?.tabId !== tabId || webConversation(session.chatUrl, session.accountIndex)) return;
+  const chatUrl = webConversation(value, session.accountIndex);
+  if (chatUrl && chatUrl !== session.retiredChatUrl) {
+    await chrome.storage.local.set({ geminiBrowserSession: { ...session, chatUrl } });
+    const job = await webRead();
+    if (job?.geminiTab === tabId && !webConversation(job.conversationUrl, job.accountIndex)) { job.conversationUrl = chatUrl; job.chatProbe = false; await webSave(job); }
+  }
+}
+// Gemini may assign the conversation URL after the completed adapter stops polling.
+chrome.tabs.onUpdated?.addListener((tabId, changeInfo) => {
+  if (!changeInfo.url) return;
+  webSerial(async () => {
+    const job = await webRead();
+    if (job?.mode !== 'n8n' && job?.geminiTab === tabId && ['waiting', 'done'].includes(job.state)) await webRememberConversation(tabId, changeInfo.url);
+  }).catch(() => {});
+});
 function webOwner(job, sender) { return job && job.ownerTab === sender.tab?.id && job.ownerUrl === sender.url?.split('#')[0]; }
 function webGemini(job, sender) {
   try { return job && sender.tab?.id === job.geminiTab && new URL(sender.url).origin === 'https://gemini.google.com'; } catch { return false; }
@@ -28,7 +64,13 @@ async function webHandle(message, sender) {
     if (cached && browserModel !== 'current') return { done: true, cached: true, texts: SubtitleCore.validateTranslations(cached.map((text, id) => ({ id, text })), cues.length) };
     const old = await webRead();
     if (old && ['preparing', 'ready', 'repair-ready', 'waiting'].includes(old.state)) {
-      if (webOwner(old, sender) && old.cacheKey === cacheKey && (remote ? old.mode === 'n8n' : old.expectedEmail === geminiAccountEmail.toLowerCase() && old.accountIndex === geminiAccountIndex)) return { id: old.id };
+      if (webOwner(old, sender) && old.cacheKey === cacheKey && (remote ? old.mode === 'n8n' : old.expectedEmail === geminiAccountEmail.toLowerCase() && old.accountIndex === geminiAccountIndex)) {
+        if (old.mode !== 'n8n' && old.geminiTab) {
+          try { const awake = await chrome.tabs.sendMessage(old.geminiTab, { type: 'BROWSER_JOB_AVAILABLE' }); if (!awake?.ok) await chrome.tabs.reload(old.geminiTab); }
+          catch { try { await chrome.tabs.reload(old.geminiTab); } catch {} }
+        }
+        return { id: old.id };
+      }
       if (old.mode === 'n8n' && old.ownerTab === sender.tab.id) {
         try { await n8nRequest(old.connection, { action: 'cancel', id: old.id }); } catch { /* Local method switching must still work when the server is offline. Late remote answers are never applied. */ }
       }
@@ -38,7 +80,7 @@ async function webHandle(message, sender) {
       }
     }
     const id = crypto.randomUUID().replace(/-/g, '');
-    const job = { id, ownerTab: sender.tab.id, ownerUrl: sender.url.split('#')[0], cues, srt, cacheKey, expectedEmail: geminiAccountEmail?.toLowerCase(), accountIndex: geminiAccountIndex, mode: remote ? 'n8n' : 'browser', connection: remote, browserModel, protocol: 2, repairs: 0, state: 'preparing', created: Date.now(), updated: Date.now() };
+    const job = { id, ownerTab: sender.tab.id, ownerUrl: sender.url.split('#')[0], cues, srt, cacheKey, expectedEmail: geminiAccountEmail?.toLowerCase(), accountIndex: geminiAccountIndex, mode: remote ? 'n8n' : 'browser', connection: remote, browserModel, protocol: 2, repairs: 0, recovery: true, state: 'preparing', created: Date.now(), updated: Date.now() };
     await webSave(job);
     try {
       if (remote) {
@@ -53,26 +95,28 @@ async function webHandle(message, sender) {
         try {
           const previous = await chrome.tabs.get(old.geminiTab);
           const url = new URL(previous.url);
-          if (url.origin === 'https://gemini.google.com' && url.pathname.startsWith(`/u/${geminiAccountIndex}/app`)) savedSession = { tabId: previous.id, accountIndex: geminiAccountIndex, email: job.expectedEmail, chatUrl: url.origin + url.pathname };
+          if (webChatUrl(url.href, geminiAccountIndex)) savedSession = { tabId: previous.id, accountIndex: geminiAccountIndex, email: job.expectedEmail, chatUrl: url.origin + url.pathname };
         } catch {}
       }
       const sameAccount = savedSession?.email === job.expectedEmail && savedSession?.accountIndex === geminiAccountIndex;
       let chatUrl = base;
       if (sameAccount && savedSession.chatUrl) {
-        try { const url = new URL(savedSession.chatUrl); if (url.origin === 'https://gemini.google.com' && url.pathname.startsWith(`/u/${geminiAccountIndex}/app`)) chatUrl = url.origin + url.pathname; } catch {}
+        chatUrl = webChatUrl(savedSession.chatUrl, geminiAccountIndex) || base;
       }
       let tab, reused = false;
       if (sameAccount && savedSession.tabId) {
         try {
           const existing = await chrome.tabs.get(savedSession.tabId);
           const current = new URL(existing.url);
-          if (current.origin === 'https://gemini.google.com' && current.pathname === new URL(chatUrl).pathname) { tab = existing; reused = true; }
+          const currentUrl = webChatUrl(current.href, geminiAccountIndex);
+          const pinned = webConversation(chatUrl, geminiAccountIndex);
+          if (currentUrl && (!pinned || currentUrl === pinned)) { tab = existing; reused = true; chatUrl = currentUrl; }
         } catch { /* Reopen the saved conversation when its tab has been closed. */ }
       }
       if (!tab) tab = await chrome.tabs.create({ url: chatUrl + '#udemy-srt=' + id, active: true });
-      job.geminiTab = tab.id; job.state = 'ready'; job.status = 'Waiting for Gemini. Keep its tab open; sign in or select Pro if needed.';
+      job.geminiTab = tab.id; job.conversationUrl = chatUrl; job.chatProbe = !reused && !!webConversation(chatUrl, geminiAccountIndex); job.state = 'ready'; job.status = 'Waiting for Gemini. Keep its tab open; sign in or select Pro if needed.';
       await webSave(job);
-      await chrome.storage.local.set({ geminiBrowserSession: { tabId: tab.id, accountIndex: geminiAccountIndex, email: job.expectedEmail, chatUrl } });
+      await chrome.storage.local.set({ geminiBrowserSession: { tabId: tab.id, accountIndex: geminiAccountIndex, email: job.expectedEmail, chatUrl, retiredChatUrl: sameAccount ? savedSession.retiredChatUrl : undefined } });
       try {
         const awake = await chrome.tabs.sendMessage(tab.id, { type: 'BROWSER_JOB_AVAILABLE' });
         if (!awake?.ok && reused) await chrome.tabs.reload(tab.id);
@@ -116,19 +160,67 @@ async function webHandle(message, sender) {
   }
   if (job?.mode === 'n8n' || !webGemini(job, sender)) return { idle: true };
   if (message.type === 'WEB_TASK') {
-    const url = new URL(sender.url);
-    const session = (await chrome.storage.local.get('geminiBrowserSession')).geminiBrowserSession;
-    if (session?.tabId === sender.tab.id && url.pathname.startsWith(`/u/${job.accountIndex}/app/`) && session.chatUrl !== url.origin + url.pathname) {
-      await chrome.storage.local.set({ geminiBrowserSession: { ...session, chatUrl: url.origin + url.pathname } });
-    }
+    await webRememberConversation(job.geminiTab, (await chrome.tabs.get(job.geminiTab)).url || sender.url);
   }
-  if (message.type === 'WEB_TASK') return { id: job.id, state: job.state, expectedEmail: job.expectedEmail, accountIndex: job.accountIndex, browserModel: job.browserModel || 'argon-medium', responseId: BrowserSubtitleCore.responseId(job), repairPrompt: job.state === 'repair-ready' ? BrowserSubtitleCore.repairPrompt(job) : undefined, srt: job.state === 'ready' ? (job.protocol === 2 ? BrowserSubtitleCore.taggedSrt(job.cues) : job.srt) : undefined, prompt: job.state === 'ready' ? BrowserSubtitleCore.prompt(job.id, job.cues.length) : undefined, error: job.error };
+  if (message.type === 'WEB_TASK') {
+    const ownedDrafts = ((await chrome.storage.local.get('geminiOwnedDrafts')).geminiOwnedDrafts || []).filter(x => x.tabId === job.geminiTab);
+    const delivering = job.recovery && job.state === 'waiting' && job.delivery?.phase !== 'submitted';
+    return { id: job.id, state: job.state, conversationUrl: job.conversationUrl, chatProbe: job.chatProbe, repair: !!job.repairs, expectedEmail: job.expectedEmail, accountIndex: job.accountIndex, browserModel: job.browserModel || 'argon-medium', responseId: BrowserSubtitleCore.responseId(job), repairPrompt: job.state === 'repair-ready' ? BrowserSubtitleCore.repairPrompt(job) : undefined, srt: job.state === 'ready' ? (job.protocol === 2 ? BrowserSubtitleCore.taggedSrt(job.cues) : job.srt) : undefined, prompt: job.state === 'ready' ? BrowserSubtitleCore.prompt(BrowserSubtitleCore.responseId(job), job.cues.length) : undefined, recoverySrt: delivering && !job.repairs ? BrowserSubtitleCore.taggedSrt(job.cues) : undefined, deliveryPrompt: delivering ? (job.repairs ? BrowserSubtitleCore.repairPrompt(job) : BrowserSubtitleCore.prompt(BrowserSubtitleCore.responseId(job), job.cues.length)) : undefined, recovery: job.recovery, delivery: job.delivery, ownedDrafts, error: job.error };
+  }
   if (message.id !== job.id) throw new Error('Stale Gemini response.');
+  if (message.type === 'WEB_CHAT_MISSING' && job.recovery && ['ready', 'repair-ready', 'waiting'].includes(job.state)) {
+    const session = (await chrome.storage.local.get('geminiBrowserSession')).geminiBrowserSession;
+    const expected = webConversation(job.conversationUrl, job.accountIndex);
+    const current = webChatUrl((await chrome.tabs.get(job.geminiTab)).url, job.accountIndex);
+    const base = `https://gemini.google.com/u/${job.accountIndex}/app`;
+    if (!expected || message.conversationUrl !== expected || session?.tabId !== job.geminiTab || session.chatUrl !== expected || session.email !== job.expectedEmail) return { claimed: false };
+    if (message.reason === 'redirected-empty' ? !(job.chatProbe && current === base) : message.reason !== 'not-found' || current !== expected) return { claimed: false };
+    if ((job.chatRecoveries || 0) >= 1) throw new Error('Gemini chat အသစ်ဖြင့် တစ်ကြိမ်ပြန်စပြီး မအောင်မြင်ပါ။ Login နှင့် Gemini အခြေအနေကို စစ်ပါ။');
+    job.chatRecoveries = (job.chatRecoveries || 0) + 1;
+    job.repairs = 0; job.state = 'ready'; job.srt = BrowserSubtitleCore.toSrt(job.cues);
+    delete job.delivery; delete job.errorRetries; delete job.retryAt;
+    job.conversationUrl = base; job.chatProbe = false; job.updated = Date.now();
+    job.status = 'မူလ Gemini chat မရှိတော့သဖြင့် chat အသစ်တစ်ခုဖြင့် အလိုအလျောက် ပြန်ဘာသာပြန်နေပါသည်။';
+    await chrome.storage.local.set({ geminiBrowserSession: { ...session, chatUrl: base, retiredChatUrl: expected } });
+    await webSave(job);
+    if (current !== base) await chrome.tabs.update(job.geminiTab, { url: base + '#udemy-srt=' + job.id });
+    return { claimed: true };
+  }
   if (message.type === 'WEB_SENT' && job.state === 'ready') {
+    if (job.recovery) {
+      await webRememberDraft(job, BrowserSubtitleCore.prompt(BrowserSubtitleCore.responseId(job), job.cues.length), BrowserSubtitleCore.responseId(job));
+      job.delivery = { phase: 'claimed', uploads: 0, sends: 0, clientId: message.clientId, leaseUntil: Date.now() + 120000 };
+    }
     job.state = 'waiting'; job.srt = ''; job.status = 'The whole SRT is being translated in Gemini. Waiting for the complete reply…'; job.updated = Date.now(); await webSave(job); return { claimed: true };
   }
-  if (message.type === 'WEB_REPAIR_SENT' && job.state === 'repair-ready') { job.state = 'waiting'; job.updated = Date.now(); await webSave(job); return { claimed: true }; }
+  if (message.type === 'WEB_REPAIR_SENT' && job.state === 'repair-ready') {
+    if (job.recovery) { await webRememberDraft(job, BrowserSubtitleCore.repairPrompt(job), BrowserSubtitleCore.responseId(job)); job.delivery = { phase: 'claimed', uploads: 0, sends: 0, clientId: message.clientId, leaseUntil: Date.now() + 120000 }; }
+    job.state = 'waiting'; job.updated = Date.now(); await webSave(job); return { claimed: true };
+  }
+  if (message.type === 'WEB_DELIVERY' && job.recovery && job.state === 'waiting') {
+    if (message.responseId !== BrowserSubtitleCore.responseId(job)) throw new Error('Stale Gemini delivery.');
+    const delivery = job.delivery ||= { phase: 'claimed', uploads: 0, sends: 0 };
+    if (delivery.phase === 'submitted') return { claimed: false, submitted: true };
+    if (message.stage !== 'ack' && delivery.clientId && delivery.clientId !== message.clientId && delivery.leaseUntil > Date.now()) return { claimed: false, busy: true };
+    if (message.stage === 'upload' || message.stage === 'send') {
+      const counter = message.stage === 'upload' ? 'uploads' : 'sends';
+      if (delivery[counter] >= 2) throw new Error('Gemini သို့ ပို့မှု နှစ်ကြိမ် မအောင်မြင်ပါ။ စာတန်းကို မပြသေးပါ။');
+      delivery[counter]++; delivery.phase = message.stage === 'upload' ? 'uploading' : 'sending'; delivery.clientId = message.clientId; delivery.leaseUntil = Date.now() + 120000;
+    } else if (message.stage === 'ack') delivery.phase = 'submitted';
+    else throw new Error('Unknown delivery stage.');
+    job.status = message.stage === 'ack' ? 'SRT ပို့ပြီးပါပြီ။ Gemini ပြန်စာအပြည့်ကို စောင့်နေပါသည်။' : 'SRT ဖိုင်တင်မှုနှင့် ပို့ပြီးကြောင်း အတည်ပြုနေပါသည်။';
+    job.updated = Date.now(); await webSave(job); return { claimed: true, delivery };
+  }
+  if (message.type === 'WEB_RETRY' && job.recovery && job.state === 'waiting') {
+    if (message.responseId !== BrowserSubtitleCore.responseId(job)) throw new Error('Stale Gemini retry.');
+    if (job.retryAt && Date.now() - job.retryAt < 30000) return { claimed: false };
+    if ((job.errorRetries || 0) >= 2) throw new Error('Gemini ယာယီ error ကို နှစ်ကြိမ် အလိုအလျောက် ပြန်စမ်းပြီး မအောင်မြင်ပါ။ စာတန်းကို မပြသေးပါ။');
+    job.errorRetries = (job.errorRetries || 0) + 1; job.retryAt = Date.now();
+    job.status = `Gemini ယာယီ error ဖြစ်သဖြင့် အလိုအလျောက် ပြန်စမ်းနေပါသည် (${job.errorRetries}/2)။`;
+    await webSave(job); return { claimed: true, attempt: job.errorRetries };
+  }
   if (message.type === 'WEB_RESULT' && job.state === 'waiting') {
+    if (message.responseId && message.responseId !== BrowserSubtitleCore.responseId(job)) return { ignored: true };
     if (typeof message.raw !== 'string' || message.raw.length > 4000000) throw new Error('Invalid Gemini response.');
     let texts;
     try { texts = BrowserSubtitleCore.parseReply(message.raw, BrowserSubtitleCore.responseId(job), job.cues, job.protocol === 2); }
@@ -140,13 +232,14 @@ async function webHandle(message, sender) {
     job.state = 'done'; job.texts = texts; job.srt = ''; job.cues = []; job.updated = Date.now(); await webSave(job); return { done: true };
   }
   if (message.type === 'WEB_ERROR' && ['ready', 'repair-ready', 'waiting'].includes(job.state)) {
+    if (message.responseId && message.responseId !== BrowserSubtitleCore.responseId(job)) return { ignored: true };
     job.state = 'error'; job.error = typeof message.error === 'string' ? message.error.slice(0, 300) : 'Gemini browser translation failed.';
     job.srt = ''; job.cues = []; job.updated = Date.now(); await webSave(job); return {};
   }
   return { idle: true };
 }
 function browserMessage(message, sender, respond) {
-  if (sender.id !== chrome.runtime.id || !message || !['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_REPAIR_SENT', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
+  if (sender.id !== chrome.runtime.id || !message || !['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_REPAIR_SENT', 'WEB_CHAT_MISSING', 'WEB_DELIVERY', 'WEB_RETRY', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
   let url; try { url = new URL(sender.url); } catch { return false; }
   const udemy = url.protocol === 'https:' && (url.hostname === 'udemy.com' || url.hostname.endsWith('.udemy.com'));
   const coursera = url.protocol === 'https:' && !url.port && ['coursera.org', 'www.coursera.org'].includes(url.hostname);

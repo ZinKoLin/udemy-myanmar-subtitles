@@ -6,6 +6,30 @@
 
 မှတ်ချက် — အောက်တွင် ဖော်ပြထားသော `evidence/` စမ်းသပ်မှတ်တမ်းများကို ကိုယ်ပိုင်စက်တွင်သာ သိမ်းထားပြီး Git repository တွင် မထည့်ထားပါ။
 
+## Downloads ထဲက SRT အပိုဖိုင်ရှင်းခြင်း — Windows
+
+`scripts/cleanup-duplicate-srt.ps1` က Downloads ထဲရှိ အကြောင်းအရာအတိအကျတူသော `.srt` ဖိုင်များကို SHA-256 နှင့် ဖိုင်အရွယ်အစားဖြင့် စစ်ပါသည်။ အဟောင်းဆုံး မူတစ်ဖိုင်ကို ချန်ပြီး အပိုဖိုင်များကို Recycle Bin ထဲသာ ရွှေ့ပါသည်။ နောက်ဆုံး ၅ မိနစ်အတွင်း ပြောင်းထားသောဖိုင်များ၊ link များနှင့် subfolder များကို ချန်ထားပါသည်။
+
+အရင်ကြည့်ရန် `powershell -File .\scripts\cleanup-duplicate-srt.ps1 -WhatIf` ကို သုံးနိုင်ပါသည်။ နေ့စဉ်လည်ပတ်ရန် Windows Task Scheduler တွင် သီးခြားသတ်မှတ်ရပြီး Codex ဖွင့်ထားရန် မလိုပါ။ Extension ZIP တွင် cleanup script မပါဝင်ပါ။ Mac အတွက် cleanup installer မထည့်ရသေးပါ။
+
+## Version 0.9.4 — ဖျက်မိသော Gemini chat recovery
+
+သိမ်းထားသော chat ကို ဖွင့်ရာတွင် Gemini က chat အလွတ်စာမျက်နှာသို့ ပြန်ပို့ပြီး မှန်ကန်သော Pro account ဖြင့် page အသင့်ဖြစ်ကြောင်း တည်ငြိမ်စွာ စစ်ဆေးရလျှင် မူလ chat မရတော့ဟု သတ်မှတ်ပြီး chat အသစ်တစ်ခုဖြင့် အလိုအလျောက် ပြန်စပါသည်။ Loading၊ login၊ အခြား account၊ ကိုယ်တိုင်ရေးထားသော draft နှင့် manual New chat တို့ကို recovery အဖြစ် မယူပါ။
+
+လက်ရှိ သင်ခန်းစာ၏ SRT အပြည့်ကို response marker အသစ်ဖြင့် ပြန်ပို့ပြီး အဖြေဟောင်းကို မသုံးပါ။ Chat အသစ်၏ conversation URL ကို သိမ်းထားကာ နောက်သင်ခန်းစာများတွင် ထို chat တစ်ခုတည်းကို ဆက်သုံးပါသည်။ လုပ်ငန်းတစ်ခုအတွင်း recovery အများဆုံး တစ်ကြိမ်သာ လုပ်သဖြင့် မအောင်မြင်ချိန် chat အသစ်များ အဆက်မပြတ် မဖန်တီးပါ။ Account settings နှင့် စာတန်း cache ကို မဖျက်ပါ။
+
+စမ်းသပ်မှုတွင် Gemini ပေါ်ရှိ မရှိသော conversation URL က `/u/2/app` သို့ redirect လုပ်ကြောင်း လက်တွေ့စစ်ထားပါသည်။ Recovery မှ ဖိုင်အပြည့်ပြန်ပို့ခြင်း၊ restart ပြီး ဆက်လုပ်ခြင်းနှင့် နောက်သင်ခန်းစာများက replacement chat ကို ဆက်သုံးခြင်းတို့ကို automated tests ဖြင့် စစ်ထားပါသည်။
+
+## Version 0.9.3 — Gemini error နှင့် မပို့ရသေးသော draft
+
+သင်ခန်းစာအားလုံးအတွက် Gemini conversation URL တစ်ခုတည်းကို မှတ်ထားပါသည်။ Tab ပိတ်ထားလျှင် ထို conversation ကို ပြန်ဖွင့်ပြီး မူလ tab မှာ New chat ဖွင့်ထားမိလျှင်လည်း မူလဘာသာပြန် conversation ထဲသို့သာ ပြန်ပို့ပါသည်။ အကောင့်ပြောင်းလျှင် ထိုအကောင့်အတွက် သီးခြား conversation သုံးပါသည်။ URL နောက်ကျသတ်မှတ်ခြင်း၊ New chat နှင့် worker restart ပါဝင်သည့် စမ်းသပ်မှု စုစုပေါင်း 103 ခု အောင်မြင်ပါသည်။
+
+Model ပြောင်းခြင်း / ဖိုင်တင်ခြင်းပြီးတိုင်း editor ကို အသစ်ပြန်ရှာပြီး SRT attachment အသင့်ဖြစ်မှ prompt ထည့်ပါသည်။ Send ခလုတ်နှိပ်ရုံဖြင့် ပို့ပြီးဟု မယူဆဘဲ လက်ရှိ job marker ပါသော user turn ကို အတည်ပြုပါသည်။ Draft မပြောင်းဘဲ ပို့မထွက်လျှင် ဖိုင်ထပ်မတင်ဘဲ Send တစ်ကြိမ် ပြန်စမ်းပါသည်။ Worker / chat ပြန်တင်ချိန်တွင် delivery အခြေအနေမှ ပြန်ဆက်နိုင်ပြီး send / upload အများဆုံး နှစ်ကြိမ်သာ ခွင့်ပြုပါသည်။
+
+လက်ရှိ request အောက်တွင် Gemini ၏ ယာယီ error တက်လျှင် Redo → Try again ကို အလိုအလျောက် အများဆုံး နှစ်ကြိမ် ပြန်စမ်းပါသည်။ Login၊ account သို့မဟုတ် model limit ပြဿနာကို ဒီနည်းဖြင့် မကျော်ပါ။ Extension prompt အတိအကျ၏ SHA-256 နှင့် job marker နှစ်ခုလုံးကိုက်သော draft ကိုသာ ရှင်းပြီး ကိုယ်တိုင်ရေးထားသော draft ကို ဆက်ထိန်းထားပါသည်။ Account settings နှင့် စာတန်း cache ကို မဖျက်ပါ။
+
+လက်တွေ့စမ်းသပ်မှုတွင် Hydrogen Medium နှင့် တူညီသော Gemini chat တစ်ခုထဲ၌ **Starting a project — 76/76**၊ **Anatomy of an iOS App — 129/129** ကို အလိုအလျောက် ဘာသာပြန်ပြီး နှစ်ခုကြား Reload / Translate / Send / Redo / draft ရှင်းခြင်း မလုပ်ရပါ။ Export လုပ်ထားသည့် မူရင်းနှင့် မြန်မာ SRT စုစုပေါင်း 205 ကြောင်း၏ start/end timestamp များ တူညီပါသည်။ Gemini ယာယီ error ပြန်စမ်းသည့် branch ကို deterministic test ဖြင့် စစ်ထားပြီး နောက်ဆုံး live run နှစ်ခုတွင် ယာယီ error မဖြစ်ခဲ့ပါ။ `npm test` 100 ခုနှင့် `npm run check` အောင်မြင်ပါသည်။ ကိုယ်ပိုင်စက်မှတ်တမ်းကို `evidence/recovery-0.9.3-final*.json` တွင် သိမ်းထားပါသည်။
+
 ## Version 0.9.2 — Gemini marker မပါသည့် ပြန်စာ
 
 Gemini က BEGIN/END marker နှစ်ခုလုံးမပါဘဲ JSON code block သာ ပြန်ပေးလျှင်၊ လက်ရှိ job marker များပါသော နောက်ဆုံး user prompt ၏နောက်မှ ထွက်လာသည့် အဖြေဖြစ်ကြောင်း DOM ဖြင့် စစ်ဆေးပြီးမှ လက်ခံပါသည်။ အဖြေဟောင်း၊ အခြား job marker ပါသောအဖြေ၊ cue မပြည့်/ထပ်/တိုးသောအဖြေကို မသုံးပါ။ မူရင်း timestamp များကိုသာ ဆက်သုံးပါသည်။

@@ -5,24 +5,36 @@ const vm = require('node:vm');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 async function driver(options = {}) {
   let tick, wake, now = 0, uploads = 0, clicks = 0, state = 'ready', response = '', result, failure, timerActive = false, repaired = false;
+  let submittedPrompt = '', retryMenu = false, retries = 0, chatRecoveries = 0;
   const fileList = [];
-  const task = { id: 'job', expectedEmail: 'pro@example.com', accountIndex: 2, browserModel: options.model || 'argon-medium', srt: '1\n00:00:00,000 --> 00:00:02,000\nHello\n', prompt: 'Translate the whole file.' };
+  const task = { id: options.truncated ? '1234567890abcdef1234567890abcdef' : 'job', expectedEmail: 'pro@example.com', accountIndex: 2, browserModel: options.model || 'argon-medium', srt: '1\n00:00:00,000 --> 00:00:02,000\nHello\n', prompt: 'Translate the whole file. BEGIN_job END_job' };
+  task.prompt = `Translate the whole file.\nBEGIN_${task.id}\nEND_${task.id}`;
+  if (options.resumeRecovery) { state='waiting'; task.recovery=true; task.delivery={phase:'claimed'}; task.repair=false; task.responseId='job_chat1'; task.deliveryPrompt='Translate all fragments. BEGIN_job_chat1 END_job_chat1'; task.recoverySrt=task.srt; }
+  if (options.missingChat) { task.conversationUrl = 'https://gemini.google.com/u/2/app/deleted-chat'; task.chatProbe = !options.noProbe; }
   const element = label => ({ style: {}, textContent: '', isConnected: false, getAttribute: name => name === 'aria-label' ? label : null, getClientRects: () => [{}], classList: { contains: () => false }, focus() {}, dispatchEvent() {} });
-  const box = element('Enter a prompt for Gemini');
+  let box = element('Enter a prompt for Gemini');
+  const composer = { textContent: '', querySelectorAll(selector) { if (!options.truncated || !this.textContent) return []; const chip = element(); chip.textContent = this.textContent; return selector.includes('.gem-attachment-text') ? [chip] : []; } };
+  box.closest = () => composer;
+  if (options.paragraphs) { let rendered = ''; Object.defineProperty(box,'innerText',{get:()=>rendered}); Object.defineProperty(box,'textContent',{get:()=>rendered.replace(/\n/g,''),set:value=>{rendered=value;}}); }
+  if (options.staleDraft) { box.textContent = 'Old generated prompt. BEGIN_old END_old'; task.ownedDrafts = [{responseId:'old',fileBase:'udemy-old',hash:require('node:crypto').createHash('sha256').update(box.textContent).digest('hex')}]; }
+  if (options.userDraft) box.textContent = options.userDraft;
   if (options.hydrating) box.textContent = 'Ask Gemini';
   const account = element(options.wrongAccount ? 'Google Account: Other (other@example.com)' : 'Google Account: Pro (pro@example.com)');
   let pickerLabel = options.selected || (options.wrongModel ? 'Open mode picker, currently Gemini Auto' : 'Open mode picker, currently Argon Medium');
   const picker = element(); picker.getAttribute = name => name === 'aria-label' ? pickerLabel : null;
   const modelChoice = element(); modelChoice.textContent = options.model === 'hydrogen-medium' ? 'Hydrogen' : 'Quick answers 3.5 Flash-Lite';
   modelChoice.getAttribute = name => name === 'aria-disabled' ? String(!!options.limited) : null;
-  modelChoice.click = () => { pickerLabel = options.model === 'hydrogen-medium' ? 'Open mode picker, currently Hydrogen Medium' : 'Open mode picker, currently Flash-Lite'; };
+  modelChoice.click = () => { pickerLabel = options.model === 'hydrogen-medium' ? 'Open mode picker, currently Hydrogen Medium' : 'Open mode picker, currently Flash-Lite'; if (options.remount) { box = element('Enter a prompt for Gemini'); box.closest = () => composer; } };
   picker.click = () => {};
-  const sendButton = element('Send message'); sendButton.click = () => { clicks++; box.textContent = ''; };
+  const sendButton = element('Send message'); sendButton.click = () => { clicks++; if (options.stuckSend && clicks <= options.stuckSend) return; submittedPrompt = box.innerText ?? box.textContent; box.textContent = ''; composer.textContent = ''; };
+  const redo = element('Redo'); redo.click = () => { retryMenu = true; };
+  const again = element(); again.textContent = 'Try again'; again.click = () => { retries++; retryMenu = false; response = ''; };
   const body = { textContent: '' };
-  const input = { accept: '.txt,.srt', dispatchEvent() { uploads++; body.textContent = fileList.at(-1)?.name || ''; } };
+  const input = { accept: '.txt,.srt', getAttribute(name) { return name === 'accept' ? this.accept : null; }, dispatchEvent() { uploads++; body.textContent = fileList.at(-1)?.name || ''; composer.textContent = options.truncated ? body.textContent.slice(0,10) + '...' + body.textContent.slice(-14,-4) : options.baseOnly ? body.textContent.replace('.srt','') : body.textContent; } };
   Object.defineProperty(input, 'files', { set(value) { fileList.push(...value); } });
   const context = vm.createContext({
-    location: { hash: '#udemy-srt=job' },
+    crypto: { randomUUID: () => 'test-client', subtle: { digest: async (_, data) => require('node:crypto').createHash('sha256').update(data).digest() } }, TextEncoder,
+    location: { hash: '#udemy-srt=job', href: options.missingChat ? 'https://gemini.google.com/u/2/app' : undefined },
     Date: class extends Date { static now() { return now; } },
     getComputedStyle: () => ({ visibility: 'visible' }),
     setInterval(fn) { tick = fn; timerActive = true; return 1; }, clearInterval() { timerActive = false; },
@@ -31,23 +43,28 @@ async function driver(options = {}) {
     DataTransfer: class { constructor() { this.files = []; this.items = { add: file => this.files.push(file) }; } },
     document: {
       body, createElement: () => element(), documentElement: { append(e) { e.isConnected = true; } },
-      execCommand(command, ui, text) { box.textContent = text; return true; },
+      execCommand(command, ui, text) { if (command === 'insertText') box.textContent = text; if (command === 'delete') box.textContent = ''; return true; },
       querySelectorAll(selector) {
         if (selector.includes('Google Account:')) return [account];
         if (selector.startsWith('[contenteditable')) return [box];
-        if (selector === 'button') return [picker, sendButton];
+        if (selector === 'h1' && options.missingChat) { const h=element(); h.textContent='Where should we start?'; return [h]; }
+        if (selector.includes('[role="progressbar"]') && options.loading) return [element()];
+        if (selector === 'button') return [picker, sendButton, redo];
+        if (selector === '[role="menuitem"]') return retryMenu ? [again] : [];
         if (selector === '[role="menuitemradio"]' && options.model) return [modelChoice];
-        if (selector.includes('input[type=')) return [input];
-        if (selector === 'user-query') return options.latestPrompt ? [{ innerText: options.latestPrompt, compareDocumentPosition: () => options.disconnectedPrompt ? 5 : options.promptAfterResponse ? 2 : 4 }] : [];
+        if (selector.includes('input[type=')) return options.staleInput ? [{accept:'.srt',getAttribute:()=>'.srt',dispatchEvent(){ throw new Error('Inactive uploader must not receive a file'); }},input] : [input];
+        if (selector === 'user-query') return (response && options.hidePrompt) ? [] : submittedPrompt ? [{ innerText: response ? (options.latestPrompt || submittedPrompt) : submittedPrompt, compareDocumentPosition: () => options.disconnectedPrompt ? 5 : options.promptAfterResponse ? 2 : 4 }] : [];
         if (selector.startsWith('model-response')) return response ? [...(options.oldHistory ? Array.from({length: 100}, () => ({ get innerText() { throw new Error('Old chat text must not be read'); } })) : []), { innerText: response, querySelectorAll: () => options.codeText ? [{textContent:options.codeText}] : options.codeBlock ? [{ textContent: task.srt }] : [] }] : [];
         return [];
       }
     },
     chrome: { runtime: { id: 'test', onMessage: { addListener(fn) { wake = fn; } }, async sendMessage(message) {
       if (message.type === 'WEB_TASK') return { ok: true, ...task, state };
+      if (message.type === 'WEB_DELIVERY') { if(message.stage==='ack')task.delivery.phase='submitted'; return {ok:true,claimed:true}; }
+      if (message.type === 'WEB_CHAT_MISSING') { chatRecoveries++; task.conversationUrl='https://gemini.google.com/u/2/app'; task.chatProbe=false; task.responseId='job_chat1'; task.prompt='Translate all fragments. BEGIN_job_chat1 END_job_chat1'; state='ready'; return {ok:true,claimed:true}; }
       if (message.type === 'WEB_SENT') { state = 'waiting'; return { ok: true, claimed: !options.alreadyClaimed }; }
       if (message.type === 'WEB_REPAIR_SENT') { state = 'waiting'; return {ok:true,claimed:true}; }
-      if (message.type === 'WEB_RESULT' && options.repair && !repaired) { repaired = true; state = 'repair-ready'; task.responseId = 'job_repair1'; task.repairPrompt = 'Translate all original fragments with their IDs.'; return {ok:true,repair:true}; }
+      if (message.type === 'WEB_RESULT' && options.repair && !repaired) { repaired = true; state = 'repair-ready'; task.responseId = 'job_repair1'; task.repairPrompt = 'Translate all original fragments with their IDs. BEGIN_job_repair1 END_job_repair1'; return {ok:true,repair:true}; }
       if (message.type === 'WEB_RESULT') { result = message.raw; state = 'done'; return { ok: true, done: true }; }
       if (message.type === 'WEB_ERROR') { failure = message.error; state = 'error'; }
       return { ok: true };
@@ -55,7 +72,7 @@ async function driver(options = {}) {
   });
   vm.runInContext(fs.readFileSync(require.resolve('../gemini-browser.js'), 'utf8'), context);
   await flush();
-  return { fileList, task, get timerActive() { return timerActive; }, get uploads() { return uploads; }, get clicks() { return clicks; }, get failure() { return failure; }, get result() { return result; }, async poll(text) { if (text !== undefined) response = text; now += 2000; tick(); await flush(); }, async nextJob() { task.id = 'job2'; state = 'ready'; response = ''; result = undefined; wake({ type: 'BROWSER_JOB_AVAILABLE' }); await flush(); } };
+  return { fileList, task, get chatRecoveries() { return chatRecoveries; }, get timerActive() { return timerActive; }, get retries() { return retries; }, get draft() { return box.textContent; }, get uploads() { return uploads; }, get clicks() { return clicks; }, get failure() { return failure; }, get result() { return result; }, async elapse(ms) { now += ms; }, async poll(text) { if (text !== undefined) response = text; now += 2000; tick(); await flush(); }, async nextJob() { task.id = 'job2'; delete task.responseId; task.prompt = 'Translate the whole file. BEGIN_job2 END_job2'; state = 'ready'; response = ''; result = undefined; wake({ type: 'BROWSER_JOB_AVAILABLE' }); await flush(); } };
 }
 test('browser uploads exactly one complete SRT and waits for a stable complete marked response', async () => {
   const app = await driver();
@@ -93,7 +110,7 @@ test('complete JSON with the exact job END marker survives a missing BEGIN, but 
 
 test('markerless JSON requires the latest connected prompt of this job before its response', async () => {
   const json = '[{"id":"C000001","text":"မင်္ဂလာပါ"}]';
-  for (const options of [ {}, { latestPrompt: 'BEGIN_other\nEND_other' }, { latestPrompt: 'BEGIN_job\nEND_job', promptAfterResponse: true }, { latestPrompt: 'BEGIN_job\nEND_job', disconnectedPrompt: true } ]) {
+  for (const options of [ {hidePrompt:true}, { latestPrompt: 'BEGIN_other\nEND_other' }, { latestPrompt: 'BEGIN_job\nEND_job', promptAfterResponse: true }, { latestPrompt: 'BEGIN_job\nEND_job', disconnectedPrompt: true } ]) {
     const app = await driver({ codeText: json, ...options });
     await app.poll('JSON\n' + json); await app.poll(); await app.poll();
     assert.equal(app.result, undefined);
@@ -165,4 +182,84 @@ test('JSON markers inside or outside a code block never introduce Copy labels or
    await app.poll('BEGIN_job\nJSON Copy code\n'+json+'\nEND_job'); await app.poll(); await app.poll();
    assert.equal(app.result,'BEGIN_job\n'+json+'\nEND_job');
  }
+});
+
+
+test('remounted Hydrogen editor and basename-only attachment still submit the complete file', async () => {
+ const app = await driver({model:'hydrogen-medium',remount:true,baseOnly:true});
+ assert.equal(app.failure,undefined); assert.equal(app.uploads,1); assert.equal(app.clicks,1); assert.equal(app.draft,'');
+});
+test('an unchanged unsent prompt retries Send once without uploading again', async () => {
+ const app = await driver({stuckSend:1});
+ assert.equal(app.failure,undefined); assert.equal(app.clicks,2); assert.equal(app.uploads,1); assert.equal(app.draft,'');
+});
+test('a genuine user draft is preserved without uploading or sending', async () => {
+ const app = await driver({userDraft:'My personal notes'});
+ assert.equal(app.draft,'My personal notes'); assert.equal(app.uploads,0); assert.equal(app.clicks,0); assert.ok(app.failure);
+});
+test('owned transient Gemini errors use Redo then Try again without another SRT upload', async () => {
+ const app = await driver();
+ await app.poll('Sorry, something went wrong. Please try your request again.'); await app.poll(); await app.poll();
+ assert.equal(app.retries,1); assert.equal(app.uploads,1); assert.equal(app.clicks,1); assert.equal(app.failure,undefined);
+ await app.poll('BEGIN_job\ncomplete\nEND_job'); await app.poll(); await app.poll(); assert.ok(app.result);
+});
+test('an error beneath an unrelated prompt is never retried', async () => {
+ const app = await driver({latestPrompt:'BEGIN_other END_other'});
+ await app.poll('Sorry, something went wrong. Please try your request again.'); await app.poll(); await app.poll();
+ assert.equal(app.retries,0); assert.equal(app.result,undefined);
+});
+
+
+test('Gemini mobile truncated attachment name is matched to the unique current job', async () => {
+ const app = await driver({model:'hydrogen-medium',truncated:true});
+ assert.equal(app.failure,undefined); assert.equal(app.uploads,1); assert.equal(app.clicks,1);
+});
+
+
+test('paragraph-rendered editor text is compared without concatenating job markers', async () => {
+ const app = await driver({paragraphs:true});
+ assert.equal(app.failure,undefined); assert.equal(app.clicks,1); assert.equal(app.uploads,1);
+});
+test('a verified stale extension draft is cleared automatically before a new full file', async () => {
+ const app = await driver({staleDraft:true});
+ assert.equal(app.failure,undefined); assert.equal(app.clicks,1); assert.equal(app.uploads,1); assert.equal(app.draft,'');
+});
+
+
+test('the current uploader is used when an inactive file input survives a completed answer', async () => {
+ const app = await driver({staleInput:true});
+ assert.equal(app.failure,undefined); assert.equal(app.uploads,1); assert.equal(app.clicks,1);
+});
+
+
+test('transient errors stop after two retries and never upload another file', async () => {
+ const app = await driver(); const error = 'I encountered an error doing what you asked. Could you try again?';
+ for (let i=0;i<3;i++) { await app.elapse(31000); await app.poll(error); await app.poll(); await app.poll(); }
+ assert.equal(app.retries,2); assert.match(app.failure,/နှစ်ကြိမ်/); assert.equal(app.uploads,1); assert.equal(app.clicks,1); assert.equal(app.timerActive,false);
+});
+
+
+test('a settled missing-chat redirect automatically recovers before uploading, then completes and wakes for the next lesson', async () => {
+ const app=await driver({missingChat:true,model:'hydrogen-medium'});
+ assert.equal(app.uploads,0); await app.poll(); assert.equal(app.chatRecoveries,0);
+ await app.poll(); assert.equal(app.chatRecoveries,1); assert.equal(app.uploads,0);
+ await app.poll(); assert.equal(app.uploads,1); assert.equal(app.clicks,1); assert.equal(app.failure,undefined);
+ await app.poll('BEGIN_job_chat1\ncomplete\nEND_job_chat1'); await app.poll(); await app.poll(); assert.ok(app.result);
+ await app.nextJob(); assert.equal(app.uploads,2); assert.equal(app.chatRecoveries,1);
+});
+
+test('loading, unrelated New chat and genuine drafts never trigger missing-chat recovery', async () => {
+ for(const options of [{loading:true},{noProbe:true},{userDraft:'My own draft'}]) {
+  const app=await driver({missingChat:true,...options});await app.poll();await app.poll();
+  assert.equal(app.chatRecoveries,0);assert.equal(app.uploads,0);if(options.userDraft)assert.equal(app.draft,'My own draft');
+ }
+ const wrong=await driver({missingChat:true,wrongAccount:true});assert.equal(wrong.chatRecoveries,0);assert.equal(wrong.uploads,0);
+});
+
+
+test('resuming a recovered chat uploads the entire SRT despite its fresh response marker', async () => {
+ const app=await driver({resumeRecovery:true});
+ assert.equal(app.uploads,1);assert.equal(app.clicks,1);assert.equal(app.failure,undefined);
+ assert.equal(await app.fileList[0].text(),app.task.srt);
+ await app.poll('BEGIN_job_chat1\ncomplete\nEND_job_chat1');await app.poll();await app.poll();assert.ok(app.result);
 });
