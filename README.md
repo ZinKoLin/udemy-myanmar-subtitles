@@ -6,6 +6,12 @@
 
 မှတ်ချက် — အောက်တွင် ဖော်ပြထားသော `evidence/` စမ်းသပ်မှတ်တမ်းများကို ကိုယ်ပိုင်စက်တွင်သာ သိမ်းထားပြီး Git repository တွင် မထည့်ထားပါ။
 
+## Version 0.9.2 — Gemini marker မပါသည့် ပြန်စာ
+
+Gemini က BEGIN/END marker နှစ်ခုလုံးမပါဘဲ JSON code block သာ ပြန်ပေးလျှင်၊ လက်ရှိ job marker များပါသော နောက်ဆုံး user prompt ၏နောက်မှ ထွက်လာသည့် အဖြေဖြစ်ကြောင်း DOM ဖြင့် စစ်ဆေးပြီးမှ လက်ခံပါသည်။ အဖြေဟောင်း၊ အခြား job marker ပါသောအဖြေ၊ cue မပြည့်/ထပ်/တိုးသောအဖြေကို မသုံးပါ။ မူရင်း timestamp များကိုသာ ဆက်သုံးပါသည်။
+
+Chrome တွင် extension ကို Reload လုပ်ထားပါက ဖွင့်ထားဆဲ Udemy / Coursera စာမျက်နှာကိုလည်း Reload လုပ်ရန် လိုပါသည်။ မဟုတ်လျှင် Chrome က `Extension context invalidated` ဟု ပြပါမည်။
+
 ## Version 0.9.1 — Coursera နှင့် SRT ဒေါင်းလုဒ်
 
 Udemy နှင့် `www.coursera.org` / `coursera.org` ရှိ ကြည့်ခွင့်ရှိသော video သင်ခန်းစာများတွင် သုံးနိုင်ပါသည်။ Coursera player ၏ English subtitle track မှ signed subtitle proxy URL ကို ဖတ်ပြီး မူရင်း VTT/SRT ဖိုင်အပြည့်ကို same-origin ဖြင့် ရယူပါသည်။ အခြား domain၊ account API သို့မဟုတ် video ဖိုင်ကို မတောင်းပါ။ ကြည့်ခွင့်/စာတန်း မရှိလျှင် error ပြပြီး partial translation မပို့ပါ။

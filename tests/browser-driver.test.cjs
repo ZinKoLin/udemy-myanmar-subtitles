@@ -38,6 +38,7 @@ async function driver(options = {}) {
         if (selector === 'button') return [picker, sendButton];
         if (selector === '[role="menuitemradio"]' && options.model) return [modelChoice];
         if (selector.includes('input[type=')) return [input];
+        if (selector === 'user-query') return options.latestPrompt ? [{ innerText: options.latestPrompt, compareDocumentPosition: () => options.disconnectedPrompt ? 5 : options.promptAfterResponse ? 2 : 4 }] : [];
         if (selector.startsWith('model-response')) return response ? [...(options.oldHistory ? Array.from({length: 100}, () => ({ get innerText() { throw new Error('Old chat text must not be read'); } })) : []), { innerText: response, querySelectorAll: () => options.codeText ? [{textContent:options.codeText}] : options.codeBlock ? [{ textContent: task.srt }] : [] }] : [];
         return [];
       }
@@ -88,6 +89,19 @@ test('complete JSON with the exact job END marker survives a missing BEGIN, but 
     await app.poll('JSON\n' + json + '\nEND_job'); await app.poll(); await app.poll();
     assert.equal(app.result, 'BEGIN_job\n' + json + '\nEND_job');
   }
+});
+
+test('markerless JSON requires the latest connected prompt of this job before its response', async () => {
+  const json = '[{"id":"C000001","text":"မင်္ဂလာပါ"}]';
+  for (const options of [ {}, { latestPrompt: 'BEGIN_other\nEND_other' }, { latestPrompt: 'BEGIN_job\nEND_job', promptAfterResponse: true }, { latestPrompt: 'BEGIN_job\nEND_job', disconnectedPrompt: true } ]) {
+    const app = await driver({ codeText: json, ...options });
+    await app.poll('JSON\n' + json); await app.poll(); await app.poll();
+    assert.equal(app.result, undefined);
+  }
+  const app = await driver({ codeText: json, latestPrompt: 'BEGIN_job\nEND_job' });
+  await app.poll('JSON\n' + json + '\nEND_other'); await app.poll(); await app.poll(); assert.equal(app.result, undefined);
+  await app.poll('JSON\n' + json); await app.poll(); await app.poll();
+  assert.equal(app.result, 'BEGIN_job\n' + json + '\nEND_job');
 });
 test('a finished chat adapter wakes for the next full SRT without reloading or creating another chat', async () => {
   const app = await driver();

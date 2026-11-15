@@ -124,7 +124,17 @@
     for (const node of nodes.slice(-1)) {
       const text = node.innerText || node.textContent || '';
       const begin = `BEGIN_${id}`, end = `END_${id}`;
-      if (!text.includes(end)) continue;
+      if (!text.includes(end)) {
+        // Gemini sometimes returns only JSON. Accept that shape only after
+        // the latest visible user turn bearing THIS job's markers. Never
+        // attach an old answer or another conversation turn to the job.
+        if (text.includes('BEGIN_') || text.includes('END_')) continue;
+        const queries = document.querySelectorAll('user-query');
+        const query = queries[queries.length - 1];
+        const promptText = query?.innerText || query?.textContent || '';
+        const position = query?.compareDocumentPosition?.(node) || 0;
+        if (!promptText.includes(begin) || !promptText.includes(end) || !(position & 4) || (position & 1)) continue;
+      }
       const hasBegin = text.includes(begin);
       // Rendered code blocks include language labels and Copy buttons. Read only the code, keeping job markers.
       const code = Array.from(node.querySelectorAll('pre code'));
