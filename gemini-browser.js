@@ -123,18 +123,23 @@
     // Only the latest response can belong to the current job. Avoid materializing old chat history.
     for (const node of nodes.slice(-1)) {
       const text = node.innerText || node.textContent || '';
-      if (!text.includes(`BEGIN_${id}`) || !text.includes(`END_${id}`)) continue;
+      const begin = `BEGIN_${id}`, end = `END_${id}`;
+      if (!text.includes(end)) continue;
+      const hasBegin = text.includes(begin);
       // Rendered code blocks include language labels and Copy buttons. Read only the code, keeping job markers.
       const code = Array.from(node.querySelectorAll('pre code'));
       if (code.length === 1) {
         const content = code[0].textContent;
-        const begin = `BEGIN_${id}`, end = `END_${id}`;
+        // A complete JSON code block plus the exact current job's END marker
+        // still identifies this response if Gemini omits only BEGIN. The
+        // worker validates every numeric cue ID before applying any text.
+        if (!hasBegin && !/^\s*\[/.test(content)) continue;
         if (content.includes(begin) || /^\s*\[/.test(content) || /\d{2}:\d{2}:\d{2}[,.]\d{3}\s+-->/.test(content)) {
           // Gemini may put either marker inside the code block or outside it.
           return (content.includes(begin) ? '' : begin + '\n') + content + (content.includes(end) ? '' : '\n' + end);
         }
       }
-      return text;
+      if (hasBegin) return text;
     }
     return '';
   }
@@ -147,7 +152,7 @@
       if (task.idle) { if (notice.isConnected) { display('ဒီဘာသာပြန်လုပ်ငန်းကို ရပ်ထားပါသည်။'); stopped = true; } else if (++idleCount > 5 || !location.hash.includes('udemy-srt=')) stopped = true; return; }
       if (['done', 'cancelled', 'error'].includes(task.state)) {
         stopped = true;
-        display(task.state === 'done' ? 'ဘာသာပြန်ပြီးပါပြီ။ Udemy မှာ စာတန်းထိုး အသင့်ဖြစ်ပါပြီ။' : task.state === 'cancelled' ? 'ဘာသာပြန်မှုကို ရပ်ထားပါသည်။' : task.error);
+        display(task.state === 'done' ? 'ဘာသာပြန်ပြီးပါပြီ။ သင်ခန်းစာမှာ စာတန်းထိုး အသင့်ဖြစ်ပါပြီ။' : task.state === 'cancelled' ? 'ဘာသာပြန်မှုကို ရပ်ထားပါသည်။' : task.error);
         return;
       }
       if (task.state === 'ready') await upload(task);
@@ -160,7 +165,7 @@
           const result = await send({ type: 'WEB_RESULT', id: task.id, raw });
           if (result.repair) { lastRaw = ''; stableSince = 0; display('စာကြောင်းမပြည့်သဖြင့် အလိုအလျောက် ပြန်တောင်းနေပါသည်။'); return; }
           if (!result.done) { lastRaw = ''; stableSince = 0; return; }
-          display('ဘာသာပြန်ပြီးပါပြီ။ Udemy မှာ စာတန်းထိုး အသင့်ဖြစ်ပါပြီ။'); stopped = true;
+          display('ဘာသာပြန်ပြီးပါပြီ။ သင်ခန်းစာမှာ စာတန်းထိုး အသင့်ဖြစ်ပါပြီ။'); stopped = true;
         }
       }
     } catch (error) {

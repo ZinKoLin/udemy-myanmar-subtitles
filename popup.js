@@ -116,7 +116,7 @@ document.querySelector('#open').addEventListener('click', async () => {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await chrome.tabs.sendMessage(tab.id, { type: 'SHOW_PANEL' }); window.close();
-  } catch { status.textContent = 'Open a Udemy lecture and reload the page.'; }
+  } catch { status.textContent = 'Open a Udemy or Coursera video and reload the page.'; }
 });
 document.querySelector('#clear').addEventListener('click', async () => {
   try {

@@ -3,6 +3,15 @@
   let imported = false, visible = true, lastScan = 0, ownedTrack = null, lastCaptionIndex = -1, discovering = null;
   let browserJobId = null, waitingForFullSrt = false, renderDirty = true, lastRendered = '', lastMediaCheck = 0, lastVideoBounds = '';
   let preferences = SubtitleCore.preferences(), settingsReady = false, autoBusy = false, autoStarted = false, autoAttempts = 0, nextAutoAt = Date.now() + 1800, mediaSource = '';
+  const isCoursera = ['coursera.org', 'www.coursera.org'].includes(location.hostname);
+  let courseraFile = null;
+  const previewSource = PreviewSubtitleSource.create();
+  // Read only subtitle resource URLs the player already requested. No traffic
+  // interception, media download, new host permission, or page-world bridge.
+  previewSource.observe(performance.getEntriesByType('resource'));
+  const previewObserver = new PerformanceObserver(list => previewSource.observe(list.getEntries()));
+  previewObserver.observe({ type: 'resource', buffered: true });
+  function previewPlayer() { return video?.closest('[role="dialog"]')?.querySelector('[data-purpose="media-player-container"]') || null; }
   const host = document.createElement('div');
   host.style.cssText = 'position:fixed;right:18px;top:80px;z-index:2147483646;';
   const shadow = host.attachShadow({ mode: 'open' });
@@ -116,6 +125,30 @@
   const scan = element('button', 'Find subtitles', panel); scan.className = 'secondary';
   const start = element('button', 'Translate', panel);
   const stop = element('button', 'Stop', panel); stop.className = 'secondary'; stop.disabled = true;
+  const exportEnglish = element('button', 'English SRT', panel); exportEnglish.className = 'secondary';
+  const exportBurmese = element('button', 'မြန်မာ SRT', panel); exportBurmese.className = 'secondary';
+  function downloadSrt(snapshot, language) {
+    const blob = new Blob([BrowserSubtitleCore.toSrt(snapshot)], { type: 'application/x-subrip;charset=utf-8' });
+    const url = URL.createObjectURL(blob), anchor = document.createElement('a');
+    const title = location.pathname.split('/').filter(Boolean).pop() || 'subtitles';
+    anchor.href = url; anchor.download = `${title.replace(/[^a-z0-9_-]/gi, '_').slice(0, 80)}-${language}.srt`;
+    document.documentElement.append(anchor); anchor.click(); anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  exportEnglish.addEventListener('click', async () => {
+    const token = generation;
+    try {
+      const snapshot = await timedSubtitles();
+      if (token !== generation) return;
+      downloadSrt(snapshot, 'en');
+    } catch (error) { if (token === generation) status.textContent = error.message; }
+  });
+  exportBurmese.addEventListener('click', () => {
+    try {
+      if (!cues.length || translations.size !== cues.length || cues.some((_, i) => !translations.get(i))) throw new Error('မြန်မာစာတန်း အပြည့်အစုံ အသင့်ဖြစ်မှ SRT ဒေါင်းလုဒ်လုပ်နိုင်ပါမည်။');
+      downloadSrt(cues.map((cue, i) => ({ ...cue, text: translations.get(i) })), 'my');
+    } catch (error) { status.textContent = error.message; }
+  });
   const label = element('label', '', panel);
   const toggle = element('input', '', label); toggle.type = 'checkbox'; toggle.checked = true;
   label.append(document.createTextNode(' Show Burmese subtitles'));
@@ -158,7 +191,7 @@
     size.value = String(preferences.fontSize); color.value = preferences.fontColor;
     position.value = String(preferences.verticalPosition); positionValue.textContent = `${preferences.verticalPosition}%`;
     burmese.style.fontSize = `${preferences.fontSize}px`; burmese.style.lineHeight = '1.7'; burmese.style.color = preferences.fontColor;
-    nativeCaptionStyle.textContent = visible ? '[data-purpose="captions-cue-text"]{opacity:0!important;text-shadow:none!important}video::cue{color:transparent!important;background:transparent!important;text-shadow:none!important}' : '';
+    nativeCaptionStyle.textContent = visible ? '[data-purpose="captions-cue-text"]{opacity:0!important;text-shadow:none!important}video::cue{color:transparent!important;background:transparent!important;text-shadow:none!important}' + (translations.size && previewPlayer() ? '[role="dialog"] [data-purpose="media-player-container"] [class*="_caption-container_"]{opacity:0!important}' : '') : '';
   }
   async function savePreferences() {
     preferences = SubtitleCore.preferences({ autoTranslate: autoToggle.checked, fontSize: Number(size.value), fontColor: color.value, verticalPosition: Number(position.value) });
@@ -196,9 +229,45 @@
     if (waitingForFullSrt && event.target === video) { video.pause(); announcePending(); }
   }, true);
   function reset() {
+    courseraFile = null;
     cancel(); restoreTrack(); cues = []; translations.clear(); clearReady(); imported = false; file.value = ''; fileName.textContent = 'No file selected.'; lastCaptionIndex = -1;
     autoStarted = false; autoAttempts = 0; nextAutoAt = Date.now() + 1800;
     status.textContent = 'New lecture — waiting for subtitles.';
+    applyPreferences();
+  }
+  document.addEventListener('click', event => {
+    const button = event.target.closest?.('button');
+    const dialog = button?.closest('[role="dialog"]');
+    if (!dialog?.querySelector('[data-purpose="media-player-container"]') || !button.matches('[class*="__preview-row"]') || button.matches('[class*="__current-preview-row"]')) return;
+    // Preview item selection and closing the modal invalidate the old job before
+    // its video element/source changes (the course URL stays the same).
+    previewSource.begin(performance.now(), video?.currentSrc || '');
+    reset(); overlay.style.display = 'none';
+  }, true);
+  async function previewSubtitles() {
+    if (!previewPlayer()) return [];
+    const url = previewSource.forSource(video.currentSrc);
+    if (!url) return [];
+    const reply = await chrome.runtime.sendMessage({ type: 'FETCH_CAPTION', url });
+    if (!reply?.ok) throw new Error(reply?.error || 'Preview မူရင်းစာတန်းဖိုင်ကို မရယူနိုင်ပါ။');
+    const parsed = SubtitleCore.parseSubtitles(reply.text);
+    if (!parsed.length) throw new Error('Preview စာတန်းဖိုင်ထဲတွင် timestamp ပါသော စာတန်းများ မတွေ့ပါ။');
+    return parsed;
+  }
+  async function courseraSubtitles() {
+    if (!video) return [];
+    const source = video.currentSrc;
+    const url = CourseraSubtitleSource.subtitleUrl(Array.from(video.querySelectorAll('track')), location.href);
+    if (!url) return [];
+    if (courseraFile?.url === url && courseraFile.source === source) return courseraFile.cues.slice();
+    const response = await fetch(url, { credentials: 'same-origin', redirect: 'error', signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('Coursera မူရင်းစာတန်းဖိုင်ကို မရယူနိုင်ပါ။ သင်ခန်းစာကြည့်ခွင့်နှင့် login ကို စစ်ပါ။');
+    const text = await response.text();
+    if (text.length > 2000000) throw new Error('The complete subtitle file is too large.');
+    const parsed = SubtitleCore.parseSubtitles(text);
+    if (!parsed.length) throw new Error('Coursera ဖိုင်ထဲတွင် timestamp ပါသော စာတန်းများ မတွေ့ပါ။');
+    if (video?.currentSrc === source) courseraFile = { url, source, cues: parsed };
+    return parsed;
   }
   function readTrack() {
     if (!video) return [];
@@ -257,7 +326,11 @@
     if (!video) { status.textContent = 'Open a Udemy lecture video first.'; return; }
     if (running) return;
     const token = ++generation;
-    let found = readTrack();
+    let found = isCoursera ? await courseraSubtitles() : readTrack();
+    if (!found.length && previewPlayer()) {
+      status.textContent = 'Preview မူရင်းစာတန်းဖိုင်အပြည့် ရယူနေပါသည်…';
+      found = await previewSubtitles();
+    }
     if (!found.length) {
       status.textContent = 'Finding English subtitles…';
       for (const track of video.querySelectorAll('track')) {
@@ -289,7 +362,17 @@
     return job.finally(() => { if (discovering === job) discovering = null; });
   }
   async function timedSubtitles() {
+    if (isCoursera && !imported) {
+      const parsed = await courseraSubtitles();
+      if (!parsed.length) throw new Error('Coursera video ၏ English စာတန်း မရသေးပါ။ English captions ဖွင့်ပြီး ပြန်စမ်းပါ။');
+      return parsed;
+    }
     if (cues.length && cues.every(c => Number.isFinite(c.start) && c.end > c.start)) return cues.slice();
+    if (previewPlayer()) {
+      const parsed = await previewSubtitles();
+      if (!parsed.length) throw new Error('Preview စာတန်းဖိုင် မရသေးပါ။ English captions ဖွင့်ပြီး Find subtitles ပြန်နှိပ်ပါ။');
+      return parsed;
+    }
     const lecture = location.pathname.match(/\/lecture\/(\d+)/)?.[1];
     const slug = location.pathname.match(/\/course\/([^/]+)/)?.[1];
     if (!lecture || !slug) throw new Error('Open a Udemy lecture or import its original SRT file.');
@@ -342,6 +425,7 @@
       if (token !== generation) return;
       const texts = SubtitleCore.validateTranslations(completed.texts.map((text, id) => ({ id, text })), snapshot.length);
       texts.forEach((text, i) => translations.set(i, text));
+      applyPreferences();
       browserJobId = null;
       status.textContent = `${texts.length} / ${texts.length} subtitle lines ready${result.cached ? ' from cache' : ''}. Full SRT translation complete. Press Play to watch.`;
       announceReady(texts.length, result.cached);

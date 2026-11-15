@@ -8,6 +8,20 @@ const browser = require('../browser-core.js');
 const cues = [{ start: 0.125, end: 2, text: 'Hello' }, { start: 3, end: 5.75, text: 'Keep the code: npm test' }];
 const reply = (id, text = 'မင်္ဂလာပါ') => `BEGIN_${id}\n\`\`\`srt\n1\n00:00:00,125 --> 00:00:02,000\n${text}\n\n2\n00:00:03,000 --> 00:00:05,750\nnpm test ကို သုံးပါ\n\`\`\`\nEND_${id}`;
 const jsonReply = (id) => `BEGIN_${id}\n${JSON.stringify([{id:'C000001',text:'မင်္ဂလာပါ'},{id:'C000002',text:'npm test ကို သုံးပါ'}])}\nEND_${id}`;
+
+test('Coursera full SRT jobs use the configured Pro chat and retain owner validation', async () => {
+  const app = setup();
+  const coursera = { ...app.udemy, url: 'https://www.coursera.org/learn/test/lecture/one/introduction' };
+  assert.equal((await app.send({ type: 'GET_PROVIDER' }, coursera)).provider, 'browser');
+  const started = await app.send({ type: 'WEB_START', cues }, coursera); assert.ok(started.id);
+  const task = await app.send({ type: 'WEB_TASK' }, app.gemini); assert.equal(core.parseSubtitles(task.srt).length, 2);
+  await app.send({ type: 'WEB_SENT', id: started.id }, app.gemini);
+  assert.equal((await app.send({ type: 'WEB_RESULT', id: started.id, raw: jsonReply(started.id) }, app.gemini)).done, true);
+  assert.equal((await app.send({ type: 'WEB_STATUS', id: started.id }, coursera)).state, 'done');
+  assert.equal((await app.send({ type: 'WEB_STATUS', id: started.id }, app.udemy)).ok, false);
+  for (const url of ['https://www.coursera.org.evil.test/', 'http://www.coursera.org/', 'https://www.coursera.org:8443/']) assert.equal(await app.send({ type: 'GET_PROVIDER' }, { ...coursera, url }), false);
+  assert.equal(await app.send({ type: 'FETCH_CAPTION', url: 'https://vtt-cf.udemycdn.com/file.vtt' }, coursera), false);
+});
 test('complete SRT roundtrip preserves millisecond timing, gaps and all cues', () => {
   assert.deepEqual(core.parseSubtitles(browser.toSrt(cues)), cues);
   assert.equal(browser.timestamp(36000.001), '10:00:00,001');
@@ -18,6 +32,20 @@ test('partial replies, wrong job, duplicate IDs, blank cues fail closed', () => 
   for (const raw of [reply('other'), reply('job').replace('END_job', ''), reply('job').replace('\n2\n', '\n1\n'), reply('job', ''), reply('job').replace(/\n\n2[\s\S]*?```/, '\n```')]) {
     assert.throws(() => browser.parseReply(raw, 'job', cues));
   }
+});
+
+test('hundreds of cues accept harmless extra zero padding but still reject omitted, added and duplicate numeric IDs', () => {
+  const original = Array.from({length:114}, (_, i) => ({ start:i * 2 + 0.125, end:i * 2 + 1.75, text:'English ' + (i+1) }));
+  const items = original.map((_, i) => ({id:'C' + String(i+1).padStart(i >= 99 ? 7 : 6, '0'),text:'မြန်မာ ' + (i+1)}));
+  const raw = values => `BEGIN_many\n${JSON.stringify(values)}\nEND_many`;
+  const result = browser.translatedCues(raw(items.slice().reverse()), 'many', original, true);
+  assert.equal(result.length, 114); assert.equal(result[99].text,'မြန်မာ 100');
+  assert.deepEqual(result.map(c=>[c.start,c.end]),original.map(c=>[c.start,c.end]));
+  assert.throws(()=>browser.translatedCues(raw(items.slice(1)), 'many',original,true));
+  assert.throws(()=>browser.translatedCues(raw([...items,{id:'C000115',text:'extra'}]), 'many',original,true));
+  const duplicate = items.map(x=>({...x})); duplicate[100].id='C000100';
+  assert.throws(()=>browser.translatedCues(raw(duplicate),'many',original,true));
+  duplicate[100].id='C000115'; assert.throws(()=>browser.translatedCues(raw(duplicate),'many',original,true));
 });
 function setup(saved = { geminiAccountIndex: 2, geminiAccountEmail: 'pro@example.com' }) {
   let created = 0, calls = 0;

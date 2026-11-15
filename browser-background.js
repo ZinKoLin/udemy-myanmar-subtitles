@@ -34,7 +34,7 @@ async function webHandle(message, sender) {
       }
       if (old.ownerTab !== sender.tab.id && Date.now() - old.created < 20 * 60 * 1000) {
         let exists = true; try { await chrome.tabs.get(old.ownerTab); } catch { exists = false; }
-        if (exists) throw new Error('Another full SRT translation is running. Stop it in its Udemy tab first.');
+        if (exists) throw new Error('Another full SRT translation is running. Stop it in its lesson tab first.');
       }
     }
     const id = crypto.randomUUID().replace(/-/g, '');
@@ -149,9 +149,11 @@ function browserMessage(message, sender, respond) {
   if (sender.id !== chrome.runtime.id || !message || !['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_REPAIR_SENT', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
   let url; try { url = new URL(sender.url); } catch { return false; }
   const udemy = url.protocol === 'https:' && (url.hostname === 'udemy.com' || url.hostname.endsWith('.udemy.com'));
+  const coursera = url.protocol === 'https:' && !url.port && ['coursera.org', 'www.coursera.org'].includes(url.hostname);
   const gemini = url.origin === 'https://gemini.google.com';
-  if (!sender.tab || (!udemy && !gemini)) return false;
-  if (['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL'].includes(message.type) ? !udemy : !gemini) return false;
+  if (!sender.tab || (!udemy && !coursera && !gemini)) return false;
+  if (message.type === 'FETCH_CAPTION' && !udemy) return false;
+  if (['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL'].includes(message.type) ? !(udemy || coursera) : !gemini) return false;
   const action = message.type === 'FETCH_CAPTION' ? async () => {
     const target = new URL(message.url);
     if (target.protocol !== 'https:' || !(target.hostname === 'udemycdn.com' || target.hostname.endsWith('.udemycdn.com')) || target.username || target.password || (target.port && target.port !== '443')) throw new Error('Unsupported caption file host. Import the original SRT file instead.');
@@ -176,7 +178,7 @@ function browserMessage(message, sender, respond) {
 // Send only the model-change signal; trusted storage remains inaccessible to content scripts.
 chrome.storage.onChanged?.addListener((changes, area) => {
   if (area !== 'local' || !changes.geminiBrowserModel) return;
-  chrome.tabs.query({ url: ['https://*.udemy.com/*', 'https://udemy.com/*'] }).then(tabs => {
+  chrome.tabs.query({ url: ['https://*.udemy.com/*', 'https://udemy.com/*', 'https://www.coursera.org/*', 'https://coursera.org/*'] }).then(tabs => {
     for (const tab of tabs) chrome.tabs.sendMessage(tab.id, { type: 'BROWSER_MODEL_CHANGED' }).catch(() => {});
   }).catch(() => {});
 });

@@ -31,7 +31,7 @@ const TranslationCache = (() => {
       After restart, unknown live lectures conservatively defer eviction. */ }
   }
   async function prune(reserve = 0, allUnused = false, reserveEntries = 0) {
-    const tabs = await chrome.tabs.query({ url: ['https://*.udemy.com/*', 'https://udemy.com/*'] });
+    const tabs = await chrome.tabs.query({ url: ['https://*.udemy.com/*', 'https://udemy.com/*', 'https://www.coursera.org/*', 'https://coursera.org/*'] });
     const live = new Map(tabs.map(tab => [String(tab.id), lecture(tab.url)]));
     for (const id of Object.keys(pins)) if (pins[id].url !== live.get(id)) delete pins[id];
     // Old content scripts may still be displaying a lecture whose cache has not registered yet.

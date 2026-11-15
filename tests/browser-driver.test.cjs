@@ -78,6 +78,17 @@ test('rendered SRT code is extracted without Copy button text or language labels
   await app.poll(); await app.poll();
   assert.equal(app.result, `BEGIN_job\n${app.task.srt}\nEND_job`);
 });
+
+test('complete JSON with the exact job END marker survives a missing BEGIN, but wrong job endings stay rejected', async () => {
+  const json = '[{"id":"C000001","text":"မင်္ဂလာပါ"}]';
+  for (const codeText of [json, json + '\nEND_job']) {
+    const app = await driver({ codeText });
+    await app.poll('JSON\n' + json + '\nEND_other'); await app.poll(); await app.poll();
+    assert.equal(app.result, undefined);
+    await app.poll('JSON\n' + json + '\nEND_job'); await app.poll(); await app.poll();
+    assert.equal(app.result, 'BEGIN_job\n' + json + '\nEND_job');
+  }
+});
 test('a finished chat adapter wakes for the next full SRT without reloading or creating another chat', async () => {
   const app = await driver();
   await app.poll('BEGIN_job\ncomplete\nEND_job'); await app.poll(); await app.poll();

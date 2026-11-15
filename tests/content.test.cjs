@@ -5,8 +5,8 @@ const vm = require('node:vm');
 const core = require('../core.js');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-async function page() {
-  const nodes = [], documentEvents = {}, timers = []; let captionWrites = 0;
+async function page(options = {}) {
+  const nodes = [], documentEvents = {}, timers = [], downloads = [], fetched = []; let captionWrites = 0;
   class Element {
     constructor(tag) { this.tag = tag; this.textContent = ''; this.style = {}; this.dataset = {}; this.handlers = {}; this.attributes = {}; this.children = []; this.offsetHeight = 20; nodes.push(this); }
     append(...children) { for (const child of children) { child.parentElement = this; this.children.push(child); } }
@@ -14,6 +14,10 @@ async function page() {
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
     focus() {}
+    click() {}
+    remove() {}
+    closest(selector) { return options.preview && selector === '[role="dialog"]' ? { querySelector: () => ({}) } : null; }
+    querySelectorAll() { return []; }
     get textContent() { return this._text || ''; }
     set textContent(value) { this._text = value; if (this.className === 'burmese') captionWrites++; }
     getBoundingClientRect() { return { top: 0, left: 0, width: 640, height: 360, bottom: 360 }; }
@@ -28,10 +32,21 @@ async function page() {
     addEventListener: (name, handler) => { documentEvents[name] = handler; },
     querySelector: () => null, querySelectorAll: selector => selector === 'video' ? [video] : []
   };
+  if (options.preview) { video.textTracks = []; video.currentSrc = 'blob:preview-one'; }
+  if (options.coursera) {
+    video.textTracks = [];
+    video.querySelectorAll = () => [{ srclang: 'en', label: 'English', src: '/api/subtitleAssetProxy.v1/english?fileExtension=vtt' }];
+  }
+  class TestURL extends URL { static createObjectURL(blob) { downloads.push(blob); return 'blob:download'; } static revokeObjectURL() {} }
+  const requests = [], resources = options.resources || [];
   vm.runInNewContext(fs.readFileSync(require.resolve('../content.js'), 'utf8'), {
-    SubtitleCore: core, document, window: { addEventListener() {} }, location: { pathname: '/course/test/learn/lecture/1' }, Date, innerHeight: 800, queueMicrotask,
+    SubtitleCore: core, BrowserSubtitleCore: require('../browser-core.js'), CourseraSubtitleSource: require('../coursera-core.js'), URL: TestURL, Blob, AbortSignal,
+    fetch: async (url, init) => { fetched.push({url, init}); return { ok: !options.denied, text: async () => 'WEBVTT\n\n00:00:00.125 --> 00:00:02.000\nFirst\n\n00:00:03.000 --> 00:00:05.750\nSecond' }; },
+    PreviewSubtitleSource: require('../preview-core.js'), performance: { getEntriesByType: () => resources, now: () => 100 }, PerformanceObserver: class { observe() {} }, document, window: { addEventListener() {} }, location: { hostname: options.coursera ? 'www.coursera.org' : 'www.udemy.com', href: 'https://www.coursera.org/learn/test/lecture/one/introduction', pathname: options.coursera ? '/learn/test/lecture/one/introduction' : options.preview ? '/course/test/' : '/course/test/learn/lecture/1' }, Date, innerHeight: 800, queueMicrotask,
     setInterval(fn) { interval = fn; }, setTimeout(fn, delay) { fn.delay = delay; timers.push(fn); return fn; }, clearTimeout(fn) { const i = timers.indexOf(fn); if (i >= 0) timers.splice(i, 1); },
     chrome: { runtime: { onMessage: { addListener() {} }, async sendMessage(message) {
+      requests.push(message);
+      if (message.type === 'FETCH_CAPTION') return { ok: true, text: 'WEBVTT\n\n00:00:00.125 --> 00:00:02.000\nFirst\n\n00:00:03.000 --> 00:00:05.750\nSecond' };
       if (message.type === 'GET_PREFERENCES') return { ok: true, preferences: { autoTranslate: false } };
       if (message.type === 'GET_PROVIDER') return { ok: true, provider: 'browser', browserModel: 'flash-lite' };
       if (message.type === 'WEB_START') return { ok: true, id: 'job' };
@@ -40,7 +55,7 @@ async function page() {
     } } }
   });
   await flush(); interval(); await flush();
-  return { video, nodes, documentEvents, timers, interval, get captionWrites() { return captionWrites; }, setState(value) { state = value; },
+  return { video, nodes, requests, downloads, fetched, documentEvents, timers, interval, get captionWrites() { return captionWrites; }, setState(value) { state = value; },
     find: text => nodes.find(n => n.tag === 'button' && n.textContent === text), notice: nodes.find(n => n.id === 'translation-notice'),
     async poll() { timers.shift()?.(); await flush(); }
   };
@@ -82,4 +97,44 @@ test('ready notice disappears after six seconds without clearing subtitles; pend
   app.video.currentTime = 1; app.interval(); assert.equal(app.nodes.find(n => n.className === 'burmese').textContent, 'ပထမ');
   app.setState('waiting'); app.find('Translate').handlers.click(); await flush();
   dismiss(); assert.equal(app.notice.hidden, false); assert.equal(app.notice.dataset.state, 'translating');
+});
+
+test('preview downloads its complete VTT, sends one whole SRT job and renders original millisecond boundaries after seeking', async () => {
+  const app = await page({ preview: true, resources: [{ name: 'https://vtt-cf.udemycdn.com/123/en_US/original.vtt', startTime: 10 }] });
+  app.find('Translate').handlers.click(); await flush();
+  const download = app.requests.find(r => r.type === 'FETCH_CAPTION');
+  assert.equal(download.url, 'https://vtt-cf.udemycdn.com/123/en_US/original.vtt');
+  const jobs = app.requests.filter(r => r.type === 'WEB_START');
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(jobs[0].cues.map(c => [c.start, c.end, c.text]), [[0.125, 2, 'First'], [3, 5.75, 'Second']]);
+  assert.equal(app.video.paused, true);
+  app.setState('done'); await app.poll();
+  const overlay = app.nodes.find(n => n.shadowRoot?.children.some(c => c.className === 'box'));
+  app.video.currentTime = 3; app.interval(); assert.equal(app.nodes.find(n => n.className === 'burmese').textContent, 'ဒုတိယ');
+  app.video.currentTime = 0.124; app.interval(); assert.equal(overlay.style.display, 'none');
+  app.video.currentTime = 0.125; app.interval(); assert.equal(app.nodes.find(n => n.className === 'burmese').textContent, 'ပထမ');
+  app.video.currentTime = 2; app.interval(); assert.equal(overlay.style.display, 'none');
+});
+
+test('Coursera fetches a complete English subtitle file once, translates in one job and exports both SRTs at original times', async () => {
+  const app = await page({ coursera: true });
+  app.find('မြန်မာ SRT').handlers.click(); assert.equal(app.downloads.length, 0);
+  app.find('Translate').handlers.click(); await flush();
+  assert.equal(app.fetched.length, 1); assert.equal(app.fetched[0].init.credentials, 'same-origin');
+  const jobs = app.requests.filter(r => r.type === 'WEB_START'); assert.equal(jobs.length, 1);
+  assert.deepEqual(jobs[0].cues.map(c => [c.start, c.end]), [[0.125, 2], [3, 5.75]]);
+  assert.equal(app.video.paused, true);
+  app.setState('done'); await app.poll();
+  await app.find('English SRT').handlers.click(); app.find('မြန်မာ SRT').handlers.click();
+  assert.equal(app.fetched.length, 1); assert.equal(app.downloads.length, 2);
+  const english = core.parseSubtitles(await app.downloads[0].text()), burmese = core.parseSubtitles(await app.downloads[1].text());
+  assert.deepEqual(english.map(c => c.text), ['First', 'Second']); assert.deepEqual(burmese.map(c => c.text), ['ပထမ', 'ဒုတိယ']);
+  assert.deepEqual(english.map(c => [c.start,c.end]), burmese.map(c => [c.start,c.end]));
+  app.video.currentTime = 3; app.interval(); assert.equal(app.nodes.find(n => n.className === 'burmese').textContent, 'ဒုတိယ');
+});
+
+test('Coursera login or access failures never send a partial subtitle job', async () => {
+  const app = await page({ coursera: true, denied: true });
+  app.find('Translate').handlers.click(); await flush();
+  assert.equal(app.requests.some(r => r.type === 'WEB_START'), false); assert.equal(app.notice.dataset.state, 'error');
 });

@@ -1,10 +1,24 @@
 <img src="icons/icon-128.png" width="80" height="80" alt="Burmese Subtitles logo">
 
-# Udemy မြန်မာစာတန်း
+# Udemy နှင့် Coursera မြန်မာစာတန်း
 
 ကိုယ်တိုင်သုံးရန် Chrome / Edge Manifest V3 extension ဖြစ်ပါသည်။ Build သို့မဟုတ် npm package တင်ရန် မလိုပါ။
 
 မှတ်ချက် — အောက်တွင် ဖော်ပြထားသော `evidence/` စမ်းသပ်မှတ်တမ်းများကို ကိုယ်ပိုင်စက်တွင်သာ သိမ်းထားပြီး Git repository တွင် မထည့်ထားပါ။
+
+## Version 0.9.1 — Coursera နှင့် SRT ဒေါင်းလုဒ်
+
+Udemy နှင့် `www.coursera.org` / `coursera.org` ရှိ ကြည့်ခွင့်ရှိသော video သင်ခန်းစာများတွင် သုံးနိုင်ပါသည်။ Coursera player ၏ English subtitle track မှ signed subtitle proxy URL ကို ဖတ်ပြီး မူရင်း VTT/SRT ဖိုင်အပြည့်ကို same-origin ဖြင့် ရယူပါသည်။ အခြား domain၊ account API သို့မဟုတ် video ဖိုင်ကို မတောင်းပါ။ ကြည့်ခွင့်/စာတန်း မရှိလျှင် error ပြပြီး partial translation မပို့ပါ။
+
+လက်ရှိ Pro account နှင့် model ကို ဆက်သုံးပြီး တူညီသော Gemini chat ထဲသို့ SRT တစ်ဖိုင်လုံး ပို့ပါသည်။ **English SRT** ခလုတ်ဖြင့် မူရင်းစာတန်းကို၊ **မြန်မာ SRT** ခလုတ်ဖြင့် ဘာသာပြန်အပြည့်ရပြီးသော စာတန်းကို ဒေါင်းလုဒ်ရယူနိုင်ပါသည်။ နှစ်ဖိုင်လုံးတွင် မူရင်း timestamp များကို ထိန်းထားပါသည်။ သင်ခန်းစာပြောင်းလျှင် စာတန်းဟောင်းနှင့် job ကို ပယ်ပြီး ပြန်ပြင်ပါသည်။ Udemy နှင့် Coursera နှစ်ခုလုံး၏ လက်ရှိဖွင့်ထားသောစာတန်းများကို cache cleanup မှ ကာကွယ်ထားပါသည်။
+
+Update ပြီးလျှင် extension ကို Reload လုပ်ပြီး Coursera သင်ခန်းစာစာမျက်နှာကိုလည်း Reload လုပ်ပါ။ Coursera video ၏ မူရင်း English စာတန်း ရှိရန်နှင့် ထိုသင်ခန်းစာကို ကြည့်ခွင့်ရှိရန် လိုပါသည်။ Subscription ဝယ်ယူခြင်း သို့မဟုတ် အသံမှစာသားပြောင်းခြင်း မပါဝင်ပါ။
+
+## Version 0.8.3 — Course Preview စာတန်း
+
+Course Preview player က တောင်းယူထားသော မူရင်း English VTT URL ကို browser Resource Timing မှ ရယူပြီး စာတန်းဖိုင်အပြည့်ကို download လုပ်ပါသည်။ Thumbnail VTT နှင့် English မဟုတ်သောဖိုင်များကို မယူပါ။ SRT တစ်ဖိုင်လုံးကို လက်ရှိ Gemini chat ထဲသို့ ပို့ပြီး cue ID များအပြည့် စစ်ဆေးပြီးမှ မူရင်း start/end timestamp ဖြင့် ပြပါသည်။ Permission အသစ်၊ video download သို့မဟုတ် traffic interception မလိုပါ။
+
+Preview video ပြောင်းလျှင် အဟောင်း၏ translation job နှင့် စာတန်းကို ရှင်းပြီး video အသစ်အတွက် ပြန်ပြင်ပါသည်။ မည်သည့် video ၏ဖိုင်ဖြစ်ကြောင်း မသေချာလျှင် ရပ်ထားပါသည်။ စာတန်းဖိုင် မတောင်းရသေးလျှင် English captions ကို ဖွင့်ပြီး **Find subtitles** ကို နှိပ်ပါ။ မူရင်း subtitle မရှိသော video ကို အသံမှစာသားပြောင်းခြင်း မပါဝင်ပါ။
 
 ## Version 0.8.2 — Logo
 

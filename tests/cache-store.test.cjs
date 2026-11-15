@@ -18,6 +18,15 @@ function cache(saved = {}, tabs = []) {
 const tab = (id, lecture = 1) => ({ id, url: `https://www.udemy.com/course/test/learn/lecture/${lecture}#overview` });
 const sender = value => ({ tab: { id: value.id }, url: value.url });
 
+test('Coursera and Udemy current lectures are both protected while old subtitles are cleaned', async () => {
+  const live = [tab(1), { id: 2, url: 'https://www.coursera.org/learn/test/lecture/one/introduction' }];
+  const app = cache({}, live);
+  await app.api.put('translation:udemy', ['တစ်'], sender(live[0]));
+  await app.api.put('translation:coursera', ['နှစ်'], sender(live[1]));
+  await app.api.put('translation:old', ['old']); app.age(31);
+  assert.equal(await app.api.cleanup(true), 1); assert.ok(app.saved['translation:udemy']); assert.ok(app.saved['translation:coursera']);
+});
+
 test('expiry and manual cleanup preserve every open lecture, credentials and settings across worker restart', async () => {
   const tabs = [tab(1), tab(2, 2)];
   const saved = { apiKeys: ['secret'], geminiAccountIndex: 2, geminiAccountEmail: 'pro@example.test', geminiBrowserModel: 'hydrogen-medium', n8nToken: 'token', subtitlePreferences: { fontSize: 30 } };

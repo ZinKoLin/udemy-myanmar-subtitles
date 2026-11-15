@@ -98,7 +98,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!['TRANSLATE', 'GET_PREFERENCES', 'SET_PREFERENCES'].includes(message.type)) return false;
   let url;
   try { url = new URL(sender.url); } catch { return false; }
-  if (url.protocol !== 'https:' || !(url.hostname === 'udemy.com' || url.hostname.endsWith('.udemy.com'))) return false;
+  if (url.protocol !== 'https:' || url.port || !(url.hostname === 'udemy.com' || url.hostname.endsWith('.udemy.com') || ['coursera.org', 'www.coursera.org'].includes(url.hostname))) return false;
   if (message.type !== 'TRANSLATE') {
     (async () => {
       await ready;

@@ -1,18 +1,18 @@
 {
   "manifest_version": 3,
-  "name": "Udemy Burmese Subtitles",
-  "version": "0.8.2",
+  "name": "Udemy & Coursera Burmese Subtitles",
+  "version": "0.9.1",
   "icons": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
   "minimum_chrome_version": "116",
-  "description": "Learn with automatic Burmese subtitles for Udemy lectures.",
+  "description": "Full SRT translation and timed Burmese subtitles for Udemy and Coursera.",
   "permissions": ["storage", "activeTab", "alarms"],
   "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
   "host_permissions": ["https://generativelanguage.googleapis.com/*", "https://gemini.google.com/*", "https://*.udemycdn.com/*"],
   "background": { "service_worker": "background.js" },
   "action": { "default_popup": "popup.html", "default_title": "Udemy Burmese Subtitles", "default_icon": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" } },
   "content_scripts": [{
-    "matches": ["https://*.udemy.com/*", "https://udemy.com/*"],
-    "js": ["core.js", "browser-core.js", "content.js"],
+    "matches": ["https://*.udemy.com/*", "https://udemy.com/*", "https://www.coursera.org/*", "https://coursera.org/*"],
+    "js": ["core.js", "browser-core.js", "preview-core.js", "coursera-core.js", "content.js"],
     "run_at": "document_idle"
   }, {
     "matches": ["https://gemini.google.com/*"],

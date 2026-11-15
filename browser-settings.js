@@ -24,7 +24,7 @@
       if (!granted) throw new Error('Access to the n8n host was not granted.');
       await chrome.storage.local.set({ n8nUrl: target.href, n8nToken, translationProvider: 'n8n' });
       provider.value = 'n8n'; update();
-      document.querySelector('#status').textContent = 'n8n connection saved. Reload Udemy or select n8n in the lecture panel. Server installation and Gemini login are required.';
+      document.querySelector('#status').textContent = 'n8n connection saved. Reload Udemy / Coursera or select n8n in the lecture panel. Server installation and Gemini login are required.';
     } catch (error) { document.querySelector('#status').textContent = error.message; }
   });
   document.querySelector('#browser-account-settings').addEventListener('submit', async event => {
@@ -35,19 +35,19 @@
       if (!Number.isInteger(geminiAccountIndex) || geminiAccountIndex < 0 || geminiAccountIndex > 20 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(geminiAccountEmail)) throw new Error('Enter the account number and email shown in your Pro Gemini tab.');
       await chrome.storage.local.set({ geminiAccountIndex, geminiAccountEmail, translationProvider: 'browser' });
       provider.value = 'browser'; update();
-      document.querySelector('#status').textContent = 'Pro အကောင့် သိမ်းပြီးပါပြီ။ ရွေးထားသော model ဖြင့် သုံးရန် Udemy မှာ Translate နှိပ်ပါ။';
+      document.querySelector('#status').textContent = 'Pro အကောင့် သိမ်းပြီးပါပြီ။ ရွေးထားသော model ဖြင့် သုံးရန် Udemy / Coursera မှာ Translate နှိပ်ပါ။';
     } catch (error) { document.querySelector('#status').textContent = error.message; }
   });
   document.querySelector('#browser-model').addEventListener('change', async event => {
     try {
       await chrome.storage.local.set({ geminiBrowserModel: event.target.value });
-      document.querySelector('#status').textContent = 'Model သိမ်းပြီးပါပြီ။ Udemy မှာ Translate ပြန်နှိပ်ပါ။';
+      document.querySelector('#status').textContent = 'Model သိမ်းပြီးပါပြီ။ Udemy / Coursera မှာ Translate ပြန်နှိပ်ပါ။';
     } catch (error) { document.querySelector('#status').textContent = error.message; }
   });
   provider.addEventListener('change', async () => {
     update();
     await chrome.storage.local.set({ translationProvider: provider.value });
-    document.querySelector('#status').textContent = provider.value === 'browser' ? 'Gemini browser selected. No API key needed. Reload the Udemy lecture.' : provider.value === 'n8n' ? 'n8n server selected. Configure the connection below before translating.' : 'Gemini API selected. Reload the Udemy lecture.';
+    document.querySelector('#status').textContent = provider.value === 'browser' ? 'Gemini browser selected. No API key needed. Reload the Udemy or Coursera lecture.' : provider.value === 'n8n' ? 'n8n server selected. Configure the connection below before translating.' : 'Gemini API selected. Reload the Udemy or Coursera lecture.';
     try { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); await chrome.tabs.sendMessage(tab.id, { type: 'MODEL_CHANGED' }); } catch {}
   });
   load().catch(() => { document.querySelector('#status').textContent = 'Could not load translation method.'; });
