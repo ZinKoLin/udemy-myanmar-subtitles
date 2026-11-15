@@ -40,8 +40,16 @@ async function webRememberConversation(tabId, value) {
 chrome.tabs.onUpdated?.addListener((tabId, changeInfo) => {
   if (!changeInfo.url) return;
   webSerial(async () => {
+    const session = (await chrome.storage.local.get('geminiBrowserSession')).geminiBrowserSession;
+    const tab = await chrome.tabs.get(tabId);
+    if (session?.tabId === tabId || (tab.active && /^https:\/\/gemini\.google\.com\//.test(tab.url || ''))) chrome.tabs.sendMessage(tabId, { type: 'BROWSER_ACCOUNT_CHECK' }).catch(() => {});
     const job = await webRead();
     if (job?.mode !== 'n8n' && job?.geminiTab === tabId && ['waiting', 'done'].includes(job.state)) await webRememberConversation(tabId, changeInfo.url);
+  }).catch(() => {});
+});
+chrome.tabs.onActivated?.addListener(({ tabId }) => {
+  chrome.tabs.get(tabId).then(tab => {
+    if (/^https:\/\/gemini\.google\.com\//.test(tab.url || '')) return chrome.tabs.sendMessage(tabId, { type: 'BROWSER_ACCOUNT_CHECK' });
   }).catch(() => {});
 });
 function webOwner(job, sender) { return job && job.ownerTab === sender.tab?.id && job.ownerUrl === sender.url?.split('#')[0]; }
@@ -50,6 +58,34 @@ function webGemini(job, sender) {
 }
 async function webHandle(message, sender) {
   await ready;
+  if (message.type === 'WEB_ACCOUNT') {
+    const saved = await chrome.storage.local.get(['translationProvider', 'geminiBrowserSession', 'geminiAccountIndex', 'geminiAccountEmail', 'geminiAccountSessions']);
+    const session = saved.geminiBrowserSession;
+    // Account switching can open a new tab. Follow the actively selected Gemini tab,
+    // while background tabs cannot replace the user's choice.
+    if ((saved.translationProvider && saved.translationProvider !== 'browser') || !session || !sender.tab?.id) return { adopted: false };
+    const liveTab = await chrome.tabs.get(sender.tab.id);
+    if (session.tabId !== sender.tab.id && !liveTab.active) return { adopted: false };
+    const accountPath = value => {
+      try { const u = new URL(value); return u.origin === 'https://gemini.google.com' ? u.pathname.match(/^\/(?:u\/(\d+)\/)?app(?:\/[a-zA-Z0-9_-]+)?$/) : null; } catch { return null; }
+    };
+    const path = accountPath(sender.url);
+    const current = accountPath(liveTab.url);
+    const index = path ? Number(path[1] || 0) : -1;
+    const email = typeof message.email === 'string' ? message.email.trim().toLowerCase() : '';
+    if (!path || !current || index !== Number(current[1] || 0) || index > 20 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { adopted: false };
+    if (saved.geminiAccountIndex === index && saved.geminiAccountEmail === email) return { adopted: true, changed: false };
+    const history = (Array.isArray(saved.geminiAccountSessions) ? saved.geminiAccountSessions : []).filter(x => x.email !== session.email || x.accountIndex !== session.accountIndex);
+    history.push(session);
+    const previous = history.find(x => x.email === email && x.accountIndex === index);
+    const chatUrl = webChatUrl(previous?.chatUrl, index) || `https://gemini.google.com/u/${index}/app`;
+    const job = await webRead();
+    if (job?.mode !== 'n8n' && job?.geminiTab === session.tabId && ['preparing', 'ready', 'repair-ready', 'waiting'].includes(job.state)) {
+      job.state = 'error'; job.error = 'Gemini အကောင့်ပြောင်းပြီးပါပြီ။ ရွေးထားသောအကောင့်အသစ်ဖြင့် Translate ပြန်နှိပ်ပါ။'; job.srt = ''; job.cues = []; job.updated = Date.now(); await webSave(job);
+    }
+    await chrome.storage.local.set({ geminiAccountIndex: index, geminiAccountEmail: email, geminiAccountSessions: history.slice(-8), geminiBrowserSession: { tabId: sender.tab.id, accountIndex: index, email, chatUrl } });
+    return { adopted: true, changed: true };
+  }
   if (message.type === 'WEB_START') {
     const settings = await chrome.storage.local.get(['translationProvider', 'geminiAccountIndex', 'geminiAccountEmail', 'geminiBrowserModel', 'n8nUrl', 'n8nToken']);
     const { translationProvider, geminiAccountIndex, geminiAccountEmail } = settings;
@@ -246,7 +282,7 @@ async function webHandle(message, sender) {
   return { idle: true };
 }
 function browserMessage(message, sender, respond) {
-  if (sender.id !== chrome.runtime.id || !message || !['FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_REPAIR_SENT', 'WEB_BUSY', 'WEB_CHAT_MISSING', 'WEB_DELIVERY', 'WEB_RETRY', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
+  if (sender.id !== chrome.runtime.id || !message || !['WEB_ACCOUNT', 'FETCH_CAPTION', 'GET_PROVIDER', 'SET_PROVIDER', 'SET_BROWSER_MODEL', 'WEB_START', 'WEB_STATUS', 'WEB_CANCEL', 'WEB_TASK', 'WEB_SENT', 'WEB_REPAIR_SENT', 'WEB_BUSY', 'WEB_CHAT_MISSING', 'WEB_DELIVERY', 'WEB_RETRY', 'WEB_RESULT', 'WEB_ERROR'].includes(message.type)) return false;
   let url; try { url = new URL(sender.url); } catch { return false; }
   const udemy = url.protocol === 'https:' && (url.hostname === 'udemy.com' || url.hostname.endsWith('.udemy.com'));
   const coursera = url.protocol === 'https:' && !url.port && ['coursera.org', 'www.coursera.org'].includes(url.hostname);

@@ -71,6 +71,61 @@ function setup(saved = { geminiAccountIndex: 2, geminiAccountEmail: 'pro@example
     send(message, sender = udemy) { return new Promise(resolve => { if (!context.browserMessage(message, sender, resolve)) resolve(false); }); }
   };
 }
+test('switching the dedicated Gemini account cancels the pending job and next SRT uses the new identity', async () => {
+  const app = setup();
+  const old = await app.send({type:'WEB_START',cues});
+  await app.send({type:'WEB_SENT',id:old.id},app.gemini);
+  app.saved.geminiBrowserSession.chatUrl = 'https://gemini.google.com/u/2/app/original-chat';
+  const next = {...app.gemini,url:'https://gemini.google.com/u/1/app'};
+  app.context.chrome.tabs.get = async id => ({id,url:next.url});
+  const adopted = await app.send({type:'WEB_ACCOUNT',email:'new@example.com'},next);
+  assert.equal(adopted.changed,true);
+  assert.equal(app.saved.geminiAccountIndex,1); assert.equal(app.saved.geminiAccountEmail,'new@example.com');
+  assert.equal(app.saved.browserSubtitleJob.state,'error');
+  assert.equal((await app.send({type:'WEB_RESULT',id:old.id,raw:jsonReply(old.id)},app.gemini)).done,undefined);
+  const fresh = await app.send({type:'WEB_START',cues});
+  assert.notEqual(fresh.id,old.id); assert.equal(app.created,1);
+  const task = await app.send({type:'WEB_TASK'},next);
+  assert.equal(task.accountIndex,1); assert.equal(task.expectedEmail,'new@example.com');
+  const back = {...app.gemini,url:'https://gemini.google.com/u/2/app'};
+  app.context.chrome.tabs.get = async id => ({id,url:back.url});
+  await app.send({type:'WEB_ACCOUNT',email:'pro@example.com'},back);
+  assert.equal(app.saved.geminiBrowserSession.chatUrl,'https://gemini.google.com/u/2/app/original-chat');
+});
+
+test('account following rejects unrelated tabs, stale navigation, malformed identities and non-browser providers', async () => {
+  const app = setup(); await app.send({type:'WEB_START',cues});
+  const msg = {type:'WEB_ACCOUNT',email:'new@example.com'};
+  for (const sender of [{...app.gemini,tab:{id:100}}, {...app.gemini,url:'https://gemini.google.com/u/1/app'}, {...app.gemini,url:'https://gemini.google.com/u/2/library'}]) {
+    assert.equal((await app.send(msg,sender)).adopted,false);
+  }
+  assert.equal((await app.send({...msg,email:'invalid'},app.gemini)).adopted,false);
+  assert.equal(await app.send(msg,app.udemy),false);
+  for (const provider of ['api','n8n']) {
+    app.saved.translationProvider=provider;
+    assert.equal((await app.send(msg,app.gemini)).adopted,false);
+  }
+  assert.equal(app.saved.geminiAccountEmail,'pro@example.com');
+});
+
+test('an account chosen in a new active Gemini tab becomes the translation tab; inactive tabs cannot undo it', async () => {
+  const app = setup();
+  const old = await app.send({type:'WEB_START',cues});
+  await app.send({type:'WEB_SENT',id:old.id},app.gemini);
+  const selected = {...app.gemini,tab:{id:105},url:'https://gemini.google.com/u/5/app?pageId=none'};
+  app.context.chrome.tabs.get = async id => id === 105 ? {id,url:selected.url,active:true} : {id,url:app.gemini.url,active:false};
+  assert.equal((await app.send({type:'WEB_ACCOUNT',email:'selected@example.com'},selected)).changed,true);
+  assert.equal(app.saved.geminiBrowserSession.tabId,105);
+  assert.equal(app.saved.geminiAccountIndex,5);
+  assert.equal(app.saved.browserSubtitleJob.state,'error');
+  assert.equal((await app.send({type:'WEB_ACCOUNT',email:'pro@example.com'},app.gemini)).adopted,false);
+  const fresh = await app.send({type:'WEB_START',cues});
+  assert.ok(fresh.id); assert.equal(app.created,1);
+  assert.equal(app.saved.browserSubtitleJob.geminiTab,105);
+  assert.equal(app.saved.browserSubtitleJob.expectedEmail,'selected@example.com');
+  assert.equal((await app.send({type:'WEB_RESULT',id:old.id,raw:jsonReply(old.id)},app.gemini)).done,undefined);
+});
+
 test('whole lecture goes as one SRT job, survives worker restart, validates and caches without API', async () => {
   const app = setup();
   assert.equal((await app.send({ type: 'GET_PROVIDER' })).provider, 'browser');

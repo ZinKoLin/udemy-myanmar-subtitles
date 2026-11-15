@@ -3,12 +3,14 @@
   let busy = false, stopped = false, lastRaw = '', stableSince = 0, idleCount = 0, wakePending = false, pollTimer;
   let missingKey = '', missingSince = 0;
   let busyStatusKey = '';
+  let reportedAccount = '';
+  let accountWaitSince = Date.now();
   let lastErrorText = '', errorSince = 0, localRetry = { id: '', count: 0, at: 0 };
   const clientId = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
   function startPolling() { if (!pollTimer) pollTimer = setInterval(tick, 1500); }
   function stopPolling() { clearInterval(pollTimer); pollTimer = null; lastRaw = ''; }
   const notice = document.createElement('div');
-  notice.style.cssText = 'position:fixed;bottom:12px;left:12px;max-width:420px;z-index:2147483647;background:#132438;color:#fff;border:1px solid #90b7da;padding:12px;border-radius:8px;font:14px/1.7 "Myanmar Text",sans-serif;white-space:pre-line';
+  notice.style.cssText = 'position:fixed;bottom:12px;right:12px;max-width:min(420px,calc(100vw - 48px));pointer-events:none;z-index:2147483647;background:#132438;color:#fff;border:1px solid #90b7da;padding:12px;border-radius:8px;font:14px/1.7 "Myanmar Text",sans-serif;white-space:pre-line';
   const send = async message => {
     const result = await transport(message);
     if (!result?.ok) throw new Error(result?.error || 'Extension connection lost.');
@@ -26,6 +28,12 @@
     throw new Error('Gemini page controls are unavailable. Sign in, select Pro, then retry from Udemy.');
   }
   const normalize = text => String(text || '').replace(/\s+/g, ' ').trim();
+  function quotaError() {
+    const banner = Array.from(document.querySelectorAll('.inline-upgrade-banner-text')).find(e => visible(e) && /^Limit reached\b/i.test(normalize(e.textContent)));
+    if (!banner) return '';
+    const reset = normalize(banner.textContent).match(/Resets at\s+([\d:]+\s*(?:AM|PM)?)/i)?.[1]?.trim();
+    return `Gemini limit ပြည့်နေပါသည်။${reset ? ` ပြန်သုံးနိုင်မည့်အချိန် ${reset}။` : ''} Model ပြောင်းပြီး Translate ပြန်နှိပ်ပါ၊ သို့မဟုတ် limit ပြန်ဖွင့်ချိန်အထိ စောင့်ပါ။`;
+  }
   const draftText = box => box?.innerText ?? box?.textContent ?? '';
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   function latestQuery() { const nodes = document.querySelectorAll('user-query'); return nodes[nodes.length - 1]; }
@@ -112,6 +120,7 @@
   async function deliver(task, repairOnly = false) {
     const id = task.responseId || task.id, prompt = task.deliveryPrompt || task.repairPrompt || task.prompt;
     if (queryMatches(id)) { await deliveryClaim(task, 'ack'); return; }
+    if (quotaError()) throw new Error(quotaError());
     await verifyAccount(task);
     for (let attempt = 0; attempt < 2; attempt++) {
       let box = await waitFor(editor);
@@ -178,6 +187,7 @@
     if (await recoverMissingChat(task)) return;
     await selectModel(task.browserModel || 'argon-medium');
     await delay(700);
+    if (quotaError()) throw new Error(quotaError());
     // Mark before upload/send: a reload must never silently send the same lecture twice.
     const claim = await send({ type: 'WEB_SENT', id: task.id, clientId });
     if (!claim.claimed) return;
@@ -214,6 +224,7 @@
     await waitFor(selected);
   }
   async function repair(task) {
+    if (quotaError()) throw new Error(quotaError());
     const box = await waitFor(editor);
     if (generating()) { display('Gemini အဖြေ ထုတ်နေဆဲဖြစ်သဖြင့် ပြီးသည်အထိ စောင့်နေပါသည်။'); return; }
     if (!generating()) await clearOwnedDraft(task);
@@ -270,7 +281,8 @@
         // Gemini sometimes returns only JSON. Accept that shape only after
         // the latest visible user turn bearing THIS job's markers. Never
         // attach an old answer or another conversation turn to the job.
-        if (text.includes('BEGIN_') || text.includes('END_')) continue;
+        const markers = text.match(/(?:BEGIN|END)_[A-Za-z0-9_]+/g) || [];
+        if (markers.some(marker => marker !== begin && marker !== end)) continue;
         const queries = document.querySelectorAll('user-query');
         const query = queries[queries.length - 1];
         const promptText = query?.innerText || query?.textContent || '';
@@ -300,6 +312,16 @@
     busy = true;
     let task;
     try {
+      // Read only the visible signed-in account; account-menu entries are not the current identity.
+      const accounts = Array.from(document.querySelectorAll('a[aria-label*="Google Account:"],button[aria-label*="Google Account:"]')).filter(visible);
+      const emails = [...new Set(accounts.map(e => (e.getAttribute('aria-label') || '').match(/\(([^\s()]+@[^\s()]+)\)/)?.[1]?.toLowerCase()).filter(Boolean))];
+      // Account controls hydrate after a navigation, even when no translation is pending.
+      if (location.href && emails.length !== 1 && Date.now() - accountWaitSince < 30000) return;
+      if (emails.length === 1 && location.href && reportedAccount !== location.href.split(/[?#]/)[0] + emails[0]) {
+        const account = await send({ type: 'WEB_ACCOUNT', email: emails[0] });
+        if (account.adopted) reportedAccount = location.href.split(/[?#]/)[0] + emails[0];
+        if (account.changed) display('Gemini တွင် ရွေးထားသောအကောင့်ကို extension က လိုက်သုံးပါမည်။ သင်ခန်းစာမှာ Translate နှိပ်ပါ။');
+      }
       task = await send({ type: 'WEB_TASK' });
       if (task.idle) { if (notice.isConnected) { display('ဒီဘာသာပြန်လုပ်ငန်းကို ရပ်ထားပါသည်။'); stopped = true; } else if (++idleCount > 5 || !location.hash.includes('udemy-srt=')) stopped = true; return; }
       if (['done', 'cancelled', 'error'].includes(task.state)) {
@@ -321,7 +343,10 @@
         }
         lastErrorText = ''; errorSince = 0;
         const raw = responseText(task.responseId || task.id);
-        if (!raw || generating()) { lastRaw = ''; stableSince = 0; return; }
+        if (!raw || generating()) {
+          if (!generating() && quotaError()) throw new Error(quotaError());
+          lastRaw = ''; stableSince = 0; return;
+        }
         if (raw !== lastRaw) { lastRaw = raw; stableSince = Date.now(); return; }
         if (Date.now() - stableSince >= 3000) {
           const result = await send({ type: 'WEB_RESULT', id: task.id, responseId: task.responseId || task.id, raw });
@@ -343,7 +368,8 @@
   }
   // Idle between jobs without polling the worker. A new lecture wakes this same chat adapter.
   if (typeof chrome !== 'undefined' && chrome.runtime?.id) chrome.runtime.onMessage?.addListener((message, sender, respond) => {
-    if (message?.type !== 'BROWSER_JOB_AVAILABLE') return false;
+    if (!['BROWSER_JOB_AVAILABLE', 'BROWSER_ACCOUNT_CHECK'].includes(message?.type)) return false;
+    if (message.type === 'BROWSER_ACCOUNT_CHECK') { reportedAccount = ''; accountWaitSince = Date.now(); }
     stopped = false; missingKey = ''; lastRaw = ''; stableSince = 0; idleCount = 0; lastErrorText = ''; errorSince = 0;
     startPolling();
     if (busy) wakePending = true; else tick(); respond?.({ ok: true }); return false;

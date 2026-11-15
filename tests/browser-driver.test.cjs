@@ -37,7 +37,7 @@ async function driver(options = {}) {
   Object.defineProperty(input, 'files', { set(value) { fileList.push(...value); } });
   const context = vm.createContext({
     crypto: { randomUUID: () => 'test-client', subtle: { digest: async (_, data) => require('node:crypto').createHash('sha256').update(data).digest() } }, TextEncoder,
-    location: { hash: '#udemy-srt=job', href: options.missingChat ? 'https://gemini.google.com/u/2/app' : undefined },
+    location: { hash: '#udemy-srt=job', href: options.accountUrl || (options.missingChat ? 'https://gemini.google.com/u/2/app' : undefined) },
     Date: class extends Date { static now() { return now; } },
     getComputedStyle: () => ({ visibility: 'visible' }),
     setInterval(fn) { tick = fn; timerActive = true; return 1; }, clearInterval() { timerActive = false; },
@@ -48,6 +48,7 @@ async function driver(options = {}) {
       body, createElement: () => element(), documentElement: { append(e) { e.isConnected = true; } },
       execCommand(command, ui, text) { if (command === 'insertText') box.textContent = text; if (command === 'delete') box.textContent = ''; return true; },
       querySelectorAll(selector) {
+        if (selector === '.inline-upgrade-banner-text') { const banner = element(); banner.textContent = options.quota; return options.quota ? [banner] : []; }
         if (selector.includes('Google Account:')) return [account];
         if (selector.startsWith('[contenteditable')) return [box];
         if (selector === 'h1' && options.missingChat) { const h=element(); h.textContent='Where should we start?'; return [h]; }
@@ -62,6 +63,7 @@ async function driver(options = {}) {
       }
     },
     chrome: { runtime: { id: 'test', onMessage: { addListener(fn) { wake = fn; } }, async sendMessage(message) {
+      if (message.type === 'WEB_ACCOUNT') { options.accountReports?.push(message.email); return {ok:true,adopted:true,changed:false}; }
       if (message.type === 'WEB_TASK') return { ok: true, ...task, state };
       if (message.type === 'WEB_DELIVERY') { if(message.stage==='ack')task.delivery.phase='submitted'; return {ok:true,claimed:true}; }
       if (message.type === 'WEB_CHAT_MISSING') { chatRecoveries++; task.conversationUrl='https://gemini.google.com/u/2/app'; task.chatProbe=false; task.responseId='job_chat1'; task.prompt='Translate all fragments. BEGIN_job_chat1 END_job_chat1'; state='ready'; return {ok:true,claimed:true}; }
@@ -87,6 +89,15 @@ test('browser uploads exactly one complete SRT and waits for a stable complete m
   await app.poll('BEGIN_job\ncomplete\nEND_job'); assert.equal(app.result, undefined);
   await app.poll(); assert.equal(app.result, undefined);
   await app.poll(); assert.equal(app.result, 'BEGIN_job\ncomplete\nEND_job');
+});
+
+test('visible Gemini identity is reported once before translation and is not repeatedly saved on polling', async () => {
+  const options = {accountUrl:'https://gemini.google.com/u/2/app',accountReports:[]};
+  const app = await driver(options);
+  assert.deepEqual(options.accountReports,['pro@example.com']);
+  await app.poll(); await app.poll();
+  assert.deepEqual(options.accountReports,['pro@example.com']);
+  assert.equal(app.uploads,1); assert.equal(app.clicks,1);
 });
 test('wrong Pro account or unavailable Argon Medium never uploads or sends a file', async () => {
   const account = await driver({ wrongAccount: true });
@@ -123,6 +134,40 @@ test('markerless JSON requires the latest connected prompt of this job before it
   await app.poll('JSON\n' + json + '\nEND_other'); await app.poll(); await app.poll(); assert.equal(app.result, undefined);
   await app.poll('JSON\n' + json); await app.poll(); await app.poll();
   assert.equal(app.result, 'BEGIN_job\n' + json + '\nEND_job');
+});
+
+test('BEGIN without END accepts only the latest connected job and still rejects foreign markers', async () => {
+  const json = '[{"id":"C000001","text":"မြန်မာ"}]';
+  for (const opts of [{}, {hidePrompt:true}, {latestPrompt:'BEGIN_other END_other'}, {promptAfterResponse:true}, {disconnectedPrompt:true}]) {
+    const app = await driver({codeText:json, ...opts});
+    await app.poll('BEGIN_job\n'+json+'\nEND_other'); await app.poll(); await app.poll();
+    assert.equal(app.result, undefined);
+    await app.poll('BEGIN_job\n'+json); await app.poll(); await app.poll();
+    assert.equal(app.result, Object.keys(opts).length ? undefined : 'BEGIN_job\n'+json+'\nEND_job');
+    assert.equal(app.uploads, 1); assert.equal(app.clicks, 1);
+  }
+});
+
+test('quota banner stops before upload and reports the displayed reset time', async () => {
+  const app = await driver({quota:'Limit reached · Resets at 21:19'});
+  assert.equal(app.uploads, 0); assert.equal(app.clicks, 0);
+  assert.match(app.failure, /Gemini limit/); assert.match(app.failure, /21:19/);
+  assert.equal(app.timerActive, false);
+});
+
+test('quota reached while waiting stops without resending, but a complete reply is collected first', async () => {
+  const options = {};
+  const app = await driver(options);
+  options.quota = 'Limit reached · Resets at 21:19';
+  await app.poll();
+  assert.match(app.failure, /Gemini limit/);
+  assert.equal(app.uploads, 1); assert.equal(app.clicks, 1); assert.equal(app.timerActive, false);
+  const fullOptions = {codeText:'[{"id":"C000001","text":"မြန်မာ"}]'};
+  const full = await driver(fullOptions);
+  fullOptions.quota = options.quota;
+  await full.poll('BEGIN_job\n'+fullOptions.codeText); await full.poll(); await full.poll();
+  assert.ok(full.result); assert.equal(full.failure, undefined);
+  assert.equal(full.uploads, 1); assert.equal(full.clicks, 1);
 });
 test('a finished chat adapter wakes for the next full SRT without reloading or creating another chat', async () => {
   const app = await driver();
