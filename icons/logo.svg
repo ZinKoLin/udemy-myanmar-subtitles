@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Burmese Subtitles — play and captions</title>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#101a2b"/>
+  <path d="M32 82V106L58 88Z" fill="#a5f3d1"/>
+  <rect x="22" y="24" width="84" height="68" rx="16" fill="#a5f3d1"/>
+  <path d="M51 38V62L75 50Z" fill="#101a2b"/>
+  <rect x="38" y="71" width="52" height="6" rx="3" fill="#101a2b"/>
+  <rect x="38" y="82" width="36" height="5" rx="2.5" fill="#101a2b"/>
+</svg>

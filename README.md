@@ -1,8 +1,14 @@
+<img src="icons/icon-128.png" width="80" height="80" alt="Burmese Subtitles logo">
+
 # Udemy မြန်မာစာတန်း
 
 ကိုယ်တိုင်သုံးရန် Chrome / Edge Manifest V3 extension ဖြစ်ပါသည်။ Build သို့မဟုတ် npm package တင်ရန် မလိုပါ။
 
 မှတ်ချက် — အောက်တွင် ဖော်ပြထားသော `evidence/` စမ်းသပ်မှတ်တမ်းများကို ကိုယ်ပိုင်စက်တွင်သာ သိမ်းထားပြီး Git repository တွင် မထည့်ထားပါ။
+
+## Version 0.8.2 — Logo
+
+Navy / mint video-caption logo အသစ်ကို Chrome toolbar၊ Extensions စာမျက်နှာနှင့် popup တွင် ထည့်ထားပါသည်။ Vector မူရင်းမှာ `icons/logo.svg` ဖြစ်ပြီး PNG icon များကို `python scripts/build-icons.py` ဖြင့် ပြန်ထုတ်နိုင်ပါသည် (development အတွက် Pillow လိုပါသည်၊ extension သုံးရန် မလိုပါ)။
 
 ## Version 0.8.1 — Cue ID တိကျခြင်း၊ တစ်ကြိမ်ပြန်တောင်းခြင်းနှင့် ready notice
 
